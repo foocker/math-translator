@@ -15,31 +15,31 @@
 单文件翻译可直接使用脚本：
 
 ```powershell
-python tools/pure-math-translator/scripts/math_translate.py chapter1.tex --document-kind book --domain topology
-python tools/pure-math-translator/scripts/math_translate.py paper.md --document-kind paper --domain algebraic_geometry
+python pure-math-translator/scripts/math_translate.py chapter1.tex --document-kind book --domain topology
+python pure-math-translator/scripts/math_translate.py paper.md --document-kind paper --domain algebraic_geometry
 ```
 
 arXiv 地址先用下载脚本取源码：
 
 ```powershell
-python tools/pure-math-translator/scripts/fetch_arxiv_source.py "https://arxiv.org/abs/2206.04655"
+python pure-math-translator/scripts/fetch_arxiv_source.py "https://arxiv.org/abs/2206.04655"
 ```
 
 脚本会生成 `arXiv_<ID>/paper_source/`，之后按 LaTeX 工程翻译。
 
 脚本默认加载内置词典，并把命中的术语作为翻译强约束交给模型：
 
-- `tools/pure-math-translator/glossary.json`
-- `tools/pure-math-translator/dictionaries/english_chinese_math_terms.tsv`
+- `pure-math-translator/glossary.json`
+- `pure-math-translator/dictionaries/english_chinese_math_terms.tsv`
 
 TSV 词表以保守方式作为补充源，正式 JSON 词典优先。大词典不会整体塞进模型上下文：脚本会先在待翻译文件中检索命中项，只把当前文档/当前分块命中的术语注入提示。翻译长文前建议先跑术语抽取或 dry-run 检查命中：
 
 ```powershell
-python tools/pure-math-translator/scripts/extract_terms.py chapter1.tex --document-kind book --domain topology -o chapter1.terms.md
+python pure-math-translator/scripts/extract_terms.py chapter1.tex --document-kind book --domain topology -o chapter1.terms.md
 ```
 
 ```powershell
-python tools/pure-math-translator/scripts/math_translate.py chapter1.tex --document-kind book --domain topology --dry-run
+python pure-math-translator/scripts/math_translate.py chapter1.tex --document-kind book --domain topology --dry-run
 ```
 
 ## Skill
@@ -47,7 +47,7 @@ python tools/pure-math-translator/scripts/math_translate.py chapter1.tex --docum
 Agent 说明位于：
 
 ```text
-tools/pure-math-translator/skills/pure-math-translator/SKILL.md
+pure-math-translator/skills/pure-math-translator/SKILL.md
 ```
 
 将该 skill 安装到支持 Agent Skills 的环境后，可用于较长的 TeX 工程、arXiv 源码翻译、书籍章节翻译和译后审校。
