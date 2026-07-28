@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "candidates": [
+    {
+      "source": "injective ring homomorphism",
+      "target": "单射环同态",
+      "domain": "abstract_algebra",
+      "reason": "代数中的映射术语，正式术语表未覆盖。",
+      "status": "candidate",
+      "occurrences": 1,
+      "first_seen": "2026-07-26T07:09:52.071599+00:00",
+      "last_seen": "2026-07-26T07:09:52.071599+00:00"
+    }
+  ]
+}
