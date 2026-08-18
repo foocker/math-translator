@@ -1,6 +1,6 @@
 # Math Translator
 
-将 PaddleOCR-VL(如果它输出格式变了，这块得跟着改) 的数学书籍 OCR 结果转换为英文 TeX，保版面结构，再将英文 TeX 翻译为中文 TeX。
+将 PaddleOCR-VL 的数学书籍 OCR 结果转换为保留源语言的 TeX，并可选地将英文 TeX 翻译为中文 TeX。
 
 当前目录约定：
 
@@ -40,33 +40,35 @@ PADDLEOCR_TOKEN=your-token
 使用本地 PDF：
 
 ```powershell
-python scripts/ppocr-vl.py "test_resources/Abel’s Theorem in Problems and SolutionsArnold.pdf" --ocr-only
+python scripts/ppocr-vl.py "test_resources/Abel’s Theorem in Problems and SolutionsArnold.pdf" --output-dir output/abel-test --ocr-only
 ```
 
 使用 URL：
 
 ```powershell
-python scripts/ppocr-vl.py "https://example.com/book.pdf" --ocr-only
+python scripts/ppocr-vl.py "https://example.com/book.pdf" --output-dir output/url-test --ocr-only
 ```
 
-`--ocr-only` 只调用 OCR，输出写入 `output/`：
+`--output-dir` 可以使用相对路径或绝对路径；目录不存在时会自动递归创建。建议每本书使用独立子目录，避免覆盖已有 OCR。未指定时仍写入默认的 `output/`。
+
+`--ocr-only` 只调用 OCR。以上本地样例会输出：
 
 ```text
-output/doc_0.md
-output/doc_1.md
-output/imgs/...
-output/layout_...
+output/abel-test/doc_0.md
+output/abel-test/doc_1.md
+output/abel-test/imgs/...
+output/abel-test/layout_...
 ```
 
-如果希望 OCR 完成后自动继续英文 TeX Agent，可以省略 `--ocr-only`：
+如果希望 OCR 完成后自动继续源语言 TeX Agent，可以省略 `--ocr-only`：
 
 ```powershell
-python scripts/ppocr-vl.py "test_resources/Abel’s Theorem in Problems and SolutionsArnold.pdf"
+python scripts/ppocr-vl.py "test_resources/Abel’s Theorem in Problems and SolutionsArnold.pdf" --output-dir output/abel-test
 ```
 
-原始 `doc_N.md` 不会被翻译或覆盖。OCR 脚本默认从脚本位置解析 `output/`，不依赖当前命令行目录。
+原始 `doc_N.md` 不会被 Agent 修改。省略 `--ocr-only` 时，后续 Agent 会自动使用同一个 `--output-dir`。
 
-## 二、OCR Markdown 转英文 TeX
+## 二、OCR Markdown 转源语言 TeX
 
 如果 `output/doc_N.md` 已经存在，可以跳过 OCR，直接运行 Agent 转换。
 
@@ -77,6 +79,12 @@ python scripts/ocr_to_tex_agent.py --phase full
 ```
 
 `--output-dir` 默认就是 `output`；只有处理其他 OCR 目录时才需要显式指定。
+
+如果 OCR 使用了前面的隔离目录，则继续使用同一个目录：
+
+```powershell
+python scripts/ocr_to_tex_agent.py --output-dir output/abel-test --phase full
+```
 
 常用阶段：
 
@@ -118,7 +126,26 @@ python scripts/ocr_to_tex_agent.py --phase full --safe-agent
 
 重新生成已有章节或审校结果时才添加 `--overwrite`。正常续跑不要添加该参数。
 
-## 三、英文 TeX 翻译为中文 TeX
+### 中文原书
+
+中文 OCR 输入也使用同一套 `full` 流程。转换 Agent 会保留中文，只做
+Markdown 到 TeX 的结构转换；不要再运行 `translator.sh`：
+
+```powershell
+python scripts/ocr_to_tex_agent.py --output-dir output/safa --phase full --overwrite
+```
+
+如果分类清单已经正确，只想重新生成章节并审校，可以避免重复分类：
+
+```powershell
+python scripts/ocr_to_tex_agent.py --output-dir output/safa --phase convert --overwrite
+python scripts/ocr_to_tex_agent.py --output-dir output/safa --phase review --overwrite
+python scripts/ocr_to_tex_agent.py --output-dir output/safa --phase assemble
+```
+
+中文书最终直接编译 `output/safa/book.tex`。只有英文 TeX 需要翻译成中文时，才进入下一节。
+
+## 三、可选：英文 TeX 翻译为中文 TeX
 
 这一步只读取已经生成的 `.tex`，不会重新读取 OCR Markdown，也不会修改英文源文件。
 
@@ -197,4 +224,3 @@ test_resources/与中学生谈谈代数.pdf
 examples/Abel’s Theorem in Problems and Solutions.pdf
 examples/book-zh.pdf
 ```
-

@@ -1,8 +1,8 @@
 # OCR Mathematics Book Agent Contract
 
 You are processing PaddleOCR-VL page Markdown for a mathematics book. The
-current deliverable is an English ElegantBook TeX project. Chinese translation
-is a later, independent stage.
+current deliverable is an ElegantBook TeX project that preserves the source
+language. Translation is a later, independent and optional stage.
 
 ## Source Integrity
 
@@ -69,5 +69,5 @@ is a later, independent stage.
   are not to be redesigned.
 - The orchestrator supplies `\maketitle`, generated `\tableofcontents`, root
   document commands, and ordered chunk inputs.
-- Generated English chapter fragments are the stable input for the later
-  English-to-Chinese translation stage.
+- Generated chapter fragments preserve the source language and are the stable
+  input for an optional later translation stage.

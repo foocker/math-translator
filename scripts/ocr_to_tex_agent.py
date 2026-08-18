@@ -54,6 +54,22 @@ class Chunk:
     pages: tuple[SourcePage, ...]
 
 
+def source_language_counts(pages: Sequence[SourcePage]) -> tuple[int, int]:
+    text = "\n".join(page.path.read_text(encoding="utf-8", errors="replace") for page in pages)
+    cjk_count = len(re.findall(r"[\u3400-\u9fff]", text))
+    latin_count = len(re.findall(r"[A-Za-z]", text))
+    return cjk_count, latin_count
+
+
+def source_language_profile(pages: Sequence[SourcePage]) -> str:
+    cjk_count, latin_count = source_language_counts(pages)
+    if cjk_count >= 20 and cjk_count >= latin_count:
+        return "Chinese-dominant"
+    if latin_count >= 20 and latin_count > cjk_count:
+        return "English-dominant"
+    return "Mixed-or-undetermined"
+
+
 class CodexRunner:
     def __init__(
         self,
@@ -363,7 +379,12 @@ def make_chunks(pages: Sequence[SourcePage], max_chars: int) -> list[Chunk]:
     return chunks
 
 
-def chunk_prompt(chunk: Chunk, previous_page: int | None, next_page: int | None) -> str:
+def chunk_prompt(
+    chunk: Chunk,
+    previous_page: int | None,
+    next_page: int | None,
+    language_profile: str,
+) -> str:
     page_files = [page.path.name for page in chunk.pages]
     return f"""Work as the OCR-to-TeX conversion agent described in AGENTS.md.
 
@@ -373,10 +394,16 @@ chunk_task.json. Convert only these owned OCR pages, in order:
 
 Neighbor page numbers are previous={previous_page!r}, next={next_page!r}. They
 are context-only when present under source/; do not duplicate their content.
+The local source-language profile is: {language_profile}. Treat it as a guardrail
+for preserving language, not as permission to translate.
 
 Required behavior:
 - Do not edit anything under source/.
-- Produce English TeX. Translation to Chinese is a later stage.
+- Preserve the source language exactly. Chinese remains Chinese, English remains
+  English, and mixed-language passages remain mixed-language. Do not translate
+  prose, headings, captions, theorem names, proofs, or exercises.
+- Produce TeX body fragments in the source language. Translation is an optional
+  later stage and is not part of OCR-to-TeX conversion.
 - Interpret Markdown semantically: preserve chapter/section hierarchy,
   theorem-like statements, proofs, exercises, lists, tables, inline/display
   mathematics, and page-boundary continuations.
@@ -412,6 +439,15 @@ def validate_chunk_artifacts(tex_path: Path, report_path: Path, chunk: Chunk) ->
     if not tex_path.is_file() or not tex_path.read_text(encoding="utf-8", errors="replace").strip():
         raise AgentPipelineError(f"Agent 未生成有效 TeX：{tex_path}")
     tex = tex_path.read_text(encoding="utf-8", errors="replace")
+    source_cjk, source_latin = source_language_counts(chunk.pages)
+    if source_cjk >= 20 and source_cjk >= source_latin:
+        target_cjk = len(re.findall(r"[\u3400-\u9fff]", tex))
+        minimum_cjk = max(10, source_cjk // 10)
+        if target_cjk < minimum_cjk:
+            raise AgentPipelineError(
+                f"源文档为中文主导，但 TeX 中文字符过少：{tex_path} "
+                f"(source={source_cjk}, tex={target_cjk}, minimum={minimum_cjk})"
+            )
     if tex.lstrip().startswith("```"):
         raise AgentPipelineError(f"TeX 分块不能包含 Markdown 代码围栏：{tex_path}")
     forbidden = ("\\documentclass", "\\begin{document}", "\\end{document}", "\\bibliography")
@@ -509,6 +545,7 @@ def run_conversion(
         run_dir = timestamped_run_dir(work_root, chunk.chunk_id)
         copy_common_agent_context(run_dir, template_dir, rules_path)
         previous_page, next_page, missing_images = stage_chunk_sources(run_dir, output_dir, pages, chunk)
+        language_profile = source_language_profile(chunk.pages)
         write_json(
             run_dir / "chunk_task.json",
             {
@@ -518,11 +555,12 @@ def run_conversion(
                 "owned_files": [page.path.name for page in chunk.pages],
                 "previous_context_page": previous_page,
                 "next_context_page": next_page,
+                "source_language": language_profile,
                 "missing_images": missing_images,
             },
         )
         print(f"启动转换 Agent {position}/{len(chunks)}：{chunk.chunk_id}", file=sys.stderr)
-        runner.run(run_dir, chunk_prompt(chunk, previous_page, next_page))
+        runner.run(run_dir, chunk_prompt(chunk, previous_page, next_page, language_profile))
         validate_chunk_artifacts(run_dir / "chunk.tex", run_dir / "chunk.report.json", chunk)
         shutil.copy2(run_dir / "chunk.tex", final_tex)
         shutil.copy2(run_dir / "chunk.report.json", final_report)
@@ -715,7 +753,8 @@ def assemble_book(
             "review_reports": review_reports,
             "template_assets": staged_assets,
             "book_tex": book_path.name,
-            "translation_stage": "pending",
+            "translation_stage": "optional",
+            "language_policy": "preserve_source_language",
         },
     )
     print(f"TeX 根文档：{book_path}", file=sys.stderr)
@@ -723,7 +762,7 @@ def assemble_book(
 
 
 def make_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="使用 Codex Agent 将 PaddleOCR 页面转换为英文 TeX")
+    parser = argparse.ArgumentParser(description="使用 Codex Agent 将 PaddleOCR 页面转换为保留源语言的 TeX")
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), help="包含 doc_N.md 和 imgs/ 的 OCR 输出目录")
     parser.add_argument("--phase", choices=["classify", "convert", "review", "assemble", "all", "full"], default="all")
     parser.add_argument("--page-count", type=int, help="仅处理 doc_0.md 到 doc_<N-1>.md，避免旧 OCR 残留页混入")

@@ -1,5 +1,6 @@
 # Please make sure the requests library is installed
 # pip install requests
+import argparse
 import json
 import os
 import requests
@@ -34,6 +35,20 @@ def load_env_file(path: Path) -> None:
         os.environ.setdefault(key, value)
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Submit a local file or URL to PaddleOCR-VL")
+    parser.add_argument("input", help="local file path or file URL")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=PROJECT_DIR / "output",
+        help="output directory; created automatically (default: tools/math-translator/output)",
+    )
+    parser.add_argument("--ocr-only", action="store_true", help="stop after saving the original OCR output")
+    return parser.parse_args()
+
+
+args = parse_args()
 load_env_file(ENV_FILE)
 TOKEN = os.environ.get("PADDLEOCR_TOKEN")
 if not TOKEN:
@@ -42,9 +57,10 @@ if not TOKEN:
         "or export it in the environment."
     )
 
-# Keep the PaddleOCR request flow below unchanged. Only the input and output
-# locations are resolved here so the command works from any current directory.
-file_path = next((arg for arg in sys.argv[1:] if not arg.startswith("--")), "<local file path or file url>")
+# Keep the PaddleOCR request flow below unchanged. Input and output locations
+# are resolved here so the command works from any current directory.
+file_path = args.input
+output_dir = args.output_dir.expanduser().resolve()
 
 headers = {
     "Authorization": f"bearer {TOKEN}",
@@ -57,6 +73,11 @@ optional_payload = {
 }
 
 print(f"Processing file: {file_path}")
+if not file_path.startswith("http") and not os.path.exists(file_path):
+    print(f"Error: File not found at {file_path}")
+    sys.exit(1)
+output_dir.mkdir(parents=True, exist_ok=True)
+print(f"Output directory: {output_dir}")
 
 if file_path.startswith("http"):
     # URL Mode
@@ -69,10 +90,6 @@ if file_path.startswith("http"):
     job_response = requests.post(JOB_URL, json=payload, headers=headers)
 else:
     # Local File Mode
-    if not os.path.exists(file_path):
-        print(f"Error: File not found at {file_path}")
-        sys.exit(1)
-        
     data = {
         "model": MODEL,
         "optionalPayload": json.dumps(optional_payload)
@@ -123,8 +140,6 @@ if jsonl_url:
     jsonl_response = requests.get(jsonl_url)
     jsonl_response.raise_for_status()
     lines = jsonl_response.text.strip().split('\n')
-    output_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "output"))
-    os.makedirs(output_dir, exist_ok=True)
     page_num = 0
     for line_num, line in enumerate(lines, start=1):
         line = line.strip()
@@ -157,13 +172,13 @@ if jsonl_url:
 
     # Agent processing is a separate module. Use --ocr-only to stop after the
     # untouched OCR output has been written.
-    if "--ocr-only" not in sys.argv[1:]:
+    if not args.ocr_only:
         agent_script = os.path.join(os.path.dirname(__file__), "ocr_to_tex_agent.py")
         agent_args = [
             sys.executable,
             agent_script,
             "--output-dir",
-            output_dir,
+            str(output_dir),
             "--phase",
             "all",
             "--page-count",

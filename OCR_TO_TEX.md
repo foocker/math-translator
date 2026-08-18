@@ -20,14 +20,18 @@ environment variable takes precedence over `.env`.
 From `tools/math-translator`:
 
 ```powershell
-python scripts/ppocr-vl.py "test_resources/book.pdf"
-python scripts/ppocr-vl.py "https://example.com/book.pdf"
+python scripts/ppocr-vl.py "test_resources/book.pdf" --output-dir output/book-test
+python scripts/ppocr-vl.py "https://example.com/book.pdf" --output-dir output/url-test
 ```
+
+`--output-dir` accepts relative or absolute paths and creates missing parent
+directories automatically. Use a separate directory per input to avoid
+overwriting an existing OCR run. It is also passed to the TeX Agent.
 
 Use `--ocr-only` to stop after the original OCR output is saved:
 
 ```powershell
-python scripts/ppocr-vl.py "test_resources/book.pdf" --ocr-only
+python scripts/ppocr-vl.py "test_resources/book.pdf" --output-dir output/book-test --ocr-only
 ```
 
 ## Agent stages
@@ -65,5 +69,5 @@ OCR repair knowledge is maintained in `config/ocr_correction_rules.json`.
 Rules are contextual guidance, never automatic substitutions. Repairs and
 uncertainties are recorded per chunk for later evaluation.
 
-The resulting English TeX chunks are the input boundary for the later Chinese
-translation stage.
+The resulting source-language TeX chunks are the input boundary for an optional
+later translation stage. OCR-to-TeX itself never translates prose.
