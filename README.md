@@ -98,6 +98,18 @@ python scripts/ocr_to_tex_agent.py \
   --workers 3
 ```
 
+如果只需要快速做 Markdown 到 TeX 的格式映射，不需要 Agent 进行语义修复，可以使用本地转换器：
+
+```bash
+python scripts/ocr_to_tex_agent.py \
+  --output-dir output/safa \
+  --phase convert \
+  --converter local \
+  --overwrite
+```
+
+`local` 模式不会调用 Codex，只映射标题、段落、列表、公式和原始图片浮动体，并写入空修复报告；`agent` 模式保留完整语义转换流程。
+
 常用阶段：
 
 ```powershell

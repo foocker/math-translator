@@ -56,6 +56,16 @@ python scripts/ocr_to_tex_agent.py \
   --workers 3
 ```
 
+仅做快速 Markdown 到 TeX 映射时，可使用本地转换器，不调用 Codex：
+
+```bash
+python scripts/ocr_to_tex_agent.py \
+  --output-dir output/safa \
+  --phase convert \
+  --converter local \
+  --overwrite
+```
+
 `--phase all` runs classify, convert, and assemble. `--phase full` also runs the
 independent review agents. Completed chunks are resumable; pass `--overwrite`
 to rerun them.

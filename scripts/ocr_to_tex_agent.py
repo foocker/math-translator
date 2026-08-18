@@ -495,6 +495,150 @@ def validate_chunk_artifacts(tex_path: Path, report_path: Path, chunk: Chunk) ->
     return report
 
 
+def tex_inline(value: str) -> str:
+    """Escape plain Markdown text without touching TeX math spans."""
+    parts = re.split(r"(\$\$.*?\$\$|\$[^$\n]+\$|\\\(.*?\\\)|\\\[.*?\\\])", value)
+    for index in range(0, len(parts), 2):
+        parts[index] = (
+            parts[index]
+            .replace("&", r"\&")
+            .replace("%", r"\%")
+            .replace("#", r"\#")
+            .replace("_", r"\_")
+        )
+    return "".join(parts)
+
+
+def local_image_figure(reference: str, alt: str = "", width: str | None = None) -> str:
+    reference = reference.strip().replace("\\", "/")
+    if reference.startswith(("http://", "https://")):
+        return ""
+    width_value = width or "0.8\\linewidth"
+    if width_value.endswith("%"):
+        try:
+            width_value = f"{float(width_value[:-1]) / 100:.3f}\\linewidth"
+        except ValueError:
+            width_value = "0.8\\linewidth"
+    caption = tex_inline(alt.strip()) if alt.strip() else ""
+    caption_line = f"\n\\caption{{{caption}}}" if caption else ""
+    return (
+        "\\begin{figure}[htbp]\n"
+        "\\centering\n"
+        f"\\includegraphics[width={width_value}]{{{reference}}}"
+        f"{caption_line}\n\\end{{figure}}"
+    )
+
+
+def markdown_page_to_tex(text: str) -> str:
+    """Fast, source-preserving Markdown-to-TeX mapping without an Agent."""
+    lines = text.splitlines()
+    output: list[str] = []
+    index = 0
+    while index < len(lines):
+        raw = lines[index].strip()
+        if not raw:
+            output.append("")
+            index += 1
+            continue
+        html_image = re.search(
+            r'<img\s+[^>]*src=["\']([^"\']+)["\'][^>]*?(?:width=["\']([^"\']+)["\'])?[^>]*>',
+            raw,
+            re.IGNORECASE,
+        )
+        markdown_image = re.fullmatch(r"!\[([^]]*)\]\(([^)]+)\)", raw)
+        if html_image or markdown_image:
+            if html_image:
+                reference, width = html_image.group(1), html_image.group(2)
+                alt = re.search(r'alt=["\']([^"\']*)["\']', raw, re.IGNORECASE)
+                caption = alt.group(1) if alt else ""
+            else:
+                caption, reference = markdown_image.group(1), markdown_image.group(2)
+                width = None
+            if index + 1 < len(lines):
+                next_line = re.sub(r"<[^>]+>", "", lines[index + 1]).strip()
+                if next_line and not re.search(r"<img\b|!\[", lines[index + 1], re.IGNORECASE):
+                    if re.fullmatch(r"(?:\([^)]*\)|[A-Za-z0-9].*)", next_line):
+                        caption = caption or next_line
+                        index += 1
+            figure = local_image_figure(reference, caption, width)
+            if figure:
+                output.extend([figure, ""])
+            index += 1
+            continue
+        if re.match(r"^#{1,6}\s+", raw):
+            match = re.match(r"^(#{1,6})\s+(.*)$", raw)
+            level = len(match.group(1))
+            command = {1: "chapter", 2: "section", 3: "subsection", 4: "subsubsection"}.get(level, "paragraph")
+            output.extend([f"\\{command}{{{tex_inline(match.group(2).strip())}}}", ""])
+            index += 1
+            continue
+        if raw.startswith("```"):
+            index += 1
+            while index < len(lines) and not lines[index].strip().startswith("```"):
+                output.append(tex_inline(lines[index]))
+                index += 1
+            index += 1
+            continue
+        if re.fullmatch(r"(?:[-*+]\s+|\d+[.)]\s+).+", raw):
+            marker = re.match(r"^(?:[-*+]|\d+[.)])\s+", raw).group(0)
+            environment = "enumerate" if marker[0].isdigit() else "itemize"
+            items = [raw[len(marker):]]
+            index += 1
+            while index < len(lines):
+                candidate = lines[index].strip()
+                item_match = re.match(r"^(?:[-*+]|\d+[.)])\s+(.+)$", candidate)
+                if not item_match:
+                    break
+                items.append(item_match.group(1))
+                index += 1
+            output.append(f"\\begin{{{environment}}}")
+            output.extend(f"\\item {tex_inline(item)}" for item in items)
+            output.extend([f"\\end{{{environment}}}", ""])
+            continue
+        if raw.startswith("<div") or raw.startswith("</div"):
+            plain = re.sub(r"<[^>]+>", "", raw).strip()
+            if plain:
+                output.extend([tex_inline(plain), ""])
+            index += 1
+            continue
+        output.append(tex_inline(raw))
+        index += 1
+    return "\n".join(output).strip() + "\n"
+
+
+def run_local_conversion(
+    chunks: Sequence[Chunk],
+    output_dir: Path,
+    work_root: Path,
+    overwrite: bool,
+) -> None:
+    chapters_dir = output_dir / "chapters"
+    reports_dir = work_root / "reports"
+    chapters_dir.mkdir(parents=True, exist_ok=True)
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    for chunk in chunks:
+        final_tex = chapters_dir / f"{chunk.chunk_id}.tex"
+        final_report = reports_dir / f"{chunk.chunk_id}.json"
+        if final_tex.is_file() and final_report.is_file() and not overwrite:
+            continue
+        source = "\n\n".join(page.path.read_text(encoding="utf-8", errors="replace") for page in chunk.pages)
+        final_tex.write_text(markdown_page_to_tex(source), encoding="utf-8", newline="")
+        write_json(
+            final_report,
+            {
+                "version": 1,
+                "chunk_id": chunk.chunk_id,
+                "source_pages": [page.number for page in chunk.pages],
+                "corrections": [],
+                "uncertainties": [],
+                "structure_notes": ["local markdown-to-tex mapping"],
+                "image_notes": [],
+            },
+        )
+        validate_chunk_artifacts(final_tex, final_report, chunk)
+        print(f"完成本地转换：{chunk.chunk_id}", file=sys.stderr)
+
+
 def stage_chunk_sources(
     run_dir: Path,
     output_dir: Path,
@@ -813,6 +957,12 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--template-dir", default=str(DEFAULT_TEMPLATE_DIR))
     parser.add_argument("--rules", default=str(DEFAULT_RULES), help="Agent OCR 修复知识表")
     parser.add_argument("--chunk-chars", type=int, default=45000, help="每个转换 Agent 负责的 OCR 字符量")
+    parser.add_argument(
+        "--converter",
+        choices=["agent", "local"],
+        default="agent",
+        help="转换器：agent 使用 Codex 做语义转换，local 只做本地 Markdown-TeX 映射",
+    )
     parser.add_argument("--title", help="覆盖 Agent 推断的书名")
     parser.add_argument(
         "--workers",
@@ -854,9 +1004,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         pages = discover_pages(output_dir, args.page_count)
         manifest_path = work_root / "page_manifest.json"
         phase = args.phase
+        needs_runner = phase != "assemble" and not (args.converter == "local" and phase == "convert")
         runner = (
             CodexRunner(args.codex_bin, args.model, args.reasoning, args.timeout, args.dangerously_bypass)
-            if phase != "assemble"
+            if needs_runner
             else None
         )
         if phase in {"classify", "all", "full"}:
@@ -871,19 +1022,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         manifest = load_manifest(manifest_path, pages)
         chunks_path = work_root / "chunks.json"
         if phase in {"convert", "all", "full"}:
-            assert runner is not None
-            chunks = run_conversion(
-                runner,
-                pages,
-                manifest,
-                output_dir,
-                work_root,
-                template_dir,
-                rules_path,
-                args.chunk_chars,
-                args.overwrite,
-                args.workers,
-            )
+            if args.converter == "local":
+                body_pages = body_pages_from_manifest(manifest, pages)
+                chunks = make_chunks(body_pages, args.chunk_chars)
+                write_chunks_index(work_root, chunks)
+                run_local_conversion(chunks, output_dir, work_root, args.overwrite)
+            else:
+                assert runner is not None
+                chunks = run_conversion(
+                    runner,
+                    pages,
+                    manifest,
+                    output_dir,
+                    work_root,
+                    template_dir,
+                    rules_path,
+                    args.chunk_chars,
+                    args.overwrite,
+                    args.workers,
+                )
         else:
             chunks = chunks_from_index(chunks_path, pages)
         if phase in {"review", "full"}:
