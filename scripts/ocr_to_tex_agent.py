@@ -28,6 +28,7 @@ DEFAULT_OUTPUT_DIR = TOOL_DIR / "output"
 DEFAULT_TEMPLATE_DIR = TOOL_DIR / "templates" / "elegantbook"
 DEFAULT_RULES = TOOL_DIR / "config" / "ocr_correction_rules.json"
 PAGE_PATTERN = re.compile(r"doc_(\d+)\.md", re.IGNORECASE)
+CLASSIFICATION_EDGE_WINDOW = 32
 ALLOWED_PAGE_CLASSES = {
     "front_matter",
     "contents",
@@ -245,22 +246,28 @@ def classification_prompt(page_count: int) -> str:
     return f"""Work as the document classification agent described in AGENTS.md.
 
 Read AGENTS.md, ocr_correction_rules.json, source_pages.json, and the staged
-source/doc_N.md files. Classify every one of the {page_count} pages by semantic
-role. Inspect the actual page files around every possible boundary; previews
-are navigation aids, not evidence on their own.
+source/doc_N.md boundary-window files. Middle pages are represented only by
+previews in source_pages.json. Determine only the retained-content boundaries. Start at
+the beginning and inspect pages forward until the complete table of contents
+and the first genuine body page are clear. Then start at the end and inspect
+pages backward until the Bibliography/References boundary is clear. Do not
+open or semantically classify every middle page; pages strictly between the
+two boundaries are body by range.
 
 Required behavior:
 - Do not edit anything under source/.
-- Locate the real Contents/Table of Contents/目录 page and all continuation
-  pages. Those OCR table entries are not body prose.
+- Locate the real Contents/Table of Contents/目录 page and the end of its
+  continuation range. Those OCR table entries are not body prose.
 - Body starts at the first genuine retained page after the complete contents,
   including a preface/introduction when it occurs after the contents.
 - Locate the Bibliography/References/参考文献 heading. Its page is excluded,
   as are all later pages.
-- Classify every page as exactly one of: front_matter, contents,
-  contents_continuation, body, bibliography, back_matter.
-- Use semantic judgment for blank pages and split headings. Do not classify by
-  a blind keyword replacement script.
+- Emit front_matter for the prefix before contents, contents for the first
+  contents page, contents_continuation for the remaining contents range,
+  body for the entire middle range, bibliography for the boundary page, and
+  back_matter for the suffix after it.
+- Use semantic judgment only at the two boundaries. Do not classify by a blind
+  keyword replacement script.
 
 Write page_manifest.json with this exact shape:
 {{
@@ -279,7 +286,9 @@ Write page_manifest.json with this exact shape:
 
 Use null for end_page_excluded only if no bibliography-like boundary exists.
 The pages array must contain every source page exactly once and in numeric
-order. Finish only after page_manifest.json is valid JSON.
+order. For middle body pages, use a concise range-based reason such as
+"between the detected body start and bibliography boundary"; do not invent
+page-specific analysis. Finish only after page_manifest.json is valid JSON.
 """
 
 
@@ -336,9 +345,23 @@ def run_classification(
 ) -> Path:
     run_dir = timestamped_run_dir(work_root, "classify")
     copy_common_agent_context(run_dir, template_dir, rules_path)
-    for page in pages:
+    # Boundary detection only needs source evidence near the beginning and
+    # end. Middle pages remain available as compact previews in source_pages.json.
+    edge_pages = list(pages[:CLASSIFICATION_EDGE_WINDOW])
+    edge_pages.extend(pages[-CLASSIFICATION_EDGE_WINDOW:])
+    edge_pages = list({page.number: page for page in edge_pages}.values())
+    edge_pages.sort(key=lambda page: page.number)
+    for page in edge_pages:
         copy_page(run_dir, page)
-    write_json(run_dir / "source_pages.json", {"version": 1, "pages": [page_preview(page) for page in pages]})
+    write_json(
+        run_dir / "source_pages.json",
+        {
+            "version": 1,
+            "pages": [page_preview(page) for page in pages],
+            "staged_boundary_pages": [page.number for page in edge_pages],
+            "classification_policy": "scan beginning/end; middle is body by range",
+        },
+    )
     print(f"启动页面分类 Agent：{run_dir}", file=sys.stderr)
     runner.run(run_dir, classification_prompt(len(pages)))
     manifest = read_json(run_dir / "page_manifest.json")

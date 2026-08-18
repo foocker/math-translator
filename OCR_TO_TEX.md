@@ -45,7 +45,7 @@ python scripts/ocr_to_tex_agent.py --phase review
 python scripts/ocr_to_tex_agent.py --phase assemble
 ```
 
-转换和审校分块默认 3 路并发，可使用 `--workers N` 调整。页面分类需要整体判断目录、正文起点和参考文献边界，因此保持单次 Agent 调用；已有分类清单时会复用，不会重复分类。
+转换和审校分块默认 3 路并发，可使用 `--workers N` 调整。页面分类只读取开头和结尾的边界窗口，中间页面使用预览并按范围归入正文；已有分类清单时会复用，不会重复分类。
 
 Git Bash 使用 `\\` 作为命令续行符；PowerShell 才使用反引号 `` ` ``。例如：
 

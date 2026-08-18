@@ -87,7 +87,7 @@ python scripts/ocr_to_tex_agent.py --output-dir output/abel-test --phase full
 ```
 
 转换和审校分块默认使用 3 路并发；可按机器和 API 限流调整，例如 `--workers 2`。
-页面分类是一次整体边界判断，已有 `agent-work/page_manifest.json` 时会直接复用，不会重复调用分类 Agent。
+页面分类只读取开头和结尾的边界窗口，中间页面使用预览并按范围归入正文；已有 `agent-work/page_manifest.json` 时会直接复用，不会重复调用分类 Agent。
 
 如果使用 Git Bash，换行续行符必须使用反斜杠 `\`，不要使用 PowerShell 的反引号 `` ` ``：
 

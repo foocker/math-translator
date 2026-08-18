@@ -15,7 +15,11 @@ language. Translation is a later, independent and optional stage.
 
 ## Classification Mode
 
-- Classify every supplied `doc_N.md` exactly once.
+- Determine the two retained-content boundaries first: scan from the
+  beginning for contents/body start, and scan backward from the end for the
+  bibliography boundary. Do not semantically inspect every middle page.
+- Classify every supplied `doc_N.md` exactly once after those boundaries are
+  known; pages strictly between them are body by range.
 - Discard all pages before the actual table of contents as `front_matter`.
 - Mark the first table-of-contents page as `contents` and further OCR contents
   pages or separator pages as `contents_continuation`.
