@@ -45,6 +45,17 @@ python scripts/ocr_to_tex_agent.py --phase review
 python scripts/ocr_to_tex_agent.py --phase assemble
 ```
 
+转换和审校分块默认 3 路并发，可使用 `--workers N` 调整。页面分类需要整体判断目录、正文起点和参考文献边界，因此保持单次 Agent 调用；已有分类清单时会复用，不会重复分类。
+
+Git Bash 使用 `\\` 作为命令续行符；PowerShell 才使用反引号 `` ` ``。例如：
+
+```bash
+python scripts/ocr_to_tex_agent.py \
+  --output-dir output/safa \
+  --phase convert \
+  --workers 3
+```
+
 `--phase all` runs classify, convert, and assemble. `--phase full` also runs the
 independent review agents. Completed chunks are resumable; pass `--overwrite`
 to rerun them.

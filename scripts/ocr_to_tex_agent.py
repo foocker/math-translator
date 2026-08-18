@@ -10,6 +10,7 @@ repair, figure association, and review belong to the agents.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 import re
@@ -527,6 +528,7 @@ def run_conversion(
     rules_path: Path,
     chunk_chars: int,
     overwrite: bool,
+    workers: int,
 ) -> list[Chunk]:
     body_pages = body_pages_from_manifest(manifest, pages)
     chunks = make_chunks(body_pages, chunk_chars)
@@ -535,13 +537,14 @@ def run_conversion(
     reports_dir = work_root / "reports"
     chapters_dir.mkdir(parents=True, exist_ok=True)
     reports_dir.mkdir(parents=True, exist_ok=True)
-    for position, chunk in enumerate(chunks, start=1):
+    def convert_one(item: tuple[int, Chunk]) -> str:
+        position, chunk = item
         final_tex = chapters_dir / f"{chunk.chunk_id}.tex"
         final_report = reports_dir / f"{chunk.chunk_id}.json"
         if not overwrite and final_tex.is_file() and final_report.is_file():
             validate_chunk_artifacts(final_tex, final_report, chunk)
             print(f"跳过已有分块 {position}/{len(chunks)}：{chunk.chunk_id}", file=sys.stderr)
-            continue
+            return chunk.chunk_id
         run_dir = timestamped_run_dir(work_root, chunk.chunk_id)
         copy_common_agent_context(run_dir, template_dir, rules_path)
         previous_page, next_page, missing_images = stage_chunk_sources(run_dir, output_dir, pages, chunk)
@@ -564,6 +567,14 @@ def run_conversion(
         validate_chunk_artifacts(run_dir / "chunk.tex", run_dir / "chunk.report.json", chunk)
         shutil.copy2(run_dir / "chunk.tex", final_tex)
         shutil.copy2(run_dir / "chunk.report.json", final_report)
+        print(f"完成转换 {position}/{len(chunks)}：{chunk.chunk_id}", file=sys.stderr)
+        return chunk.chunk_id
+
+    print(f"转换分块数：{len(chunks)}，并发数：{min(workers, len(chunks))}", file=sys.stderr)
+    with ThreadPoolExecutor(max_workers=min(workers, len(chunks))) as executor:
+        futures = [executor.submit(convert_one, item) for item in enumerate(chunks, start=1)]
+        for future in as_completed(futures):
+            future.result()
     return chunks
 
 
@@ -602,12 +613,14 @@ def run_review(
     template_dir: Path,
     rules_path: Path,
     overwrite: bool,
+    workers: int,
 ) -> None:
     reviews_dir = work_root / "reviews"
     backups_dir = work_root / "pre_review"
     reviews_dir.mkdir(parents=True, exist_ok=True)
     backups_dir.mkdir(parents=True, exist_ok=True)
-    for position, chunk in enumerate(chunks, start=1):
+    def review_one(item: tuple[int, Chunk]) -> str:
+        position, chunk = item
         chapter_path = output_dir / "chapters" / f"{chunk.chunk_id}.tex"
         conversion_report = work_root / "reports" / f"{chunk.chunk_id}.json"
         review_report = reviews_dir / f"{chunk.chunk_id}.json"
@@ -615,7 +628,7 @@ def run_review(
             raise AgentPipelineError(f"审校前缺少转换产物：{chunk.chunk_id}")
         if review_report.is_file() and not overwrite:
             print(f"跳过已有审校 {position}/{len(chunks)}：{chunk.chunk_id}", file=sys.stderr)
-            continue
+            return chunk.chunk_id
         run_dir = timestamped_run_dir(work_root, f"review-{chunk.chunk_id}")
         copy_common_agent_context(run_dir, template_dir, rules_path)
         previous_page, next_page, missing_images = stage_chunk_sources(run_dir, output_dir, pages, chunk)
@@ -647,6 +660,14 @@ def run_review(
             shutil.copy2(chapter_path, backup)
         shutil.copy2(reviewed_tex, chapter_path)
         shutil.copy2(run_dir / "review.report.json", review_report)
+        print(f"完成审校 {position}/{len(chunks)}：{chunk.chunk_id}", file=sys.stderr)
+        return chunk.chunk_id
+
+    print(f"审校分块数：{len(chunks)}，并发数：{min(workers, len(chunks))}", file=sys.stderr)
+    with ThreadPoolExecutor(max_workers=min(workers, len(chunks))) as executor:
+        futures = [executor.submit(review_one, item) for item in enumerate(chunks, start=1)]
+        for future in as_completed(futures):
+            future.result()
 
 
 def chunks_from_index(path: Path, pages: Sequence[SourcePage]) -> list[Chunk]:
@@ -770,6 +791,12 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rules", default=str(DEFAULT_RULES), help="Agent OCR 修复知识表")
     parser.add_argument("--chunk-chars", type=int, default=45000, help="每个转换 Agent 负责的 OCR 字符量")
     parser.add_argument("--title", help="覆盖 Agent 推断的书名")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=3,
+        help="转换和审校阶段的并发 Agent 数量，默认 3；页面分类仍是单次整体调用",
+    )
     parser.add_argument("--model", default=os.environ.get("MATH_TRANSLATOR_MODEL"))
     parser.add_argument("--reasoning", choices=["low", "medium", "high", "xhigh", "max"], default=os.environ.get("MATH_TRANSLATOR_REASONING"))
     parser.add_argument("--codex-bin", default=os.environ.get("MATH_TRANSLATOR_CODEX_BIN", "codex"))
@@ -794,6 +821,8 @@ def make_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = make_parser().parse_args(argv)
     try:
+        if args.workers < 1:
+            raise AgentPipelineError("--workers 必须是正整数")
         output_dir = Path(args.output_dir).expanduser().resolve()
         template_dir = Path(args.template_dir).expanduser().resolve()
         rules_path = Path(args.rules).expanduser().resolve()
@@ -830,12 +859,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 rules_path,
                 args.chunk_chars,
                 args.overwrite,
+                args.workers,
             )
         else:
             chunks = chunks_from_index(chunks_path, pages)
         if phase in {"review", "full"}:
             assert runner is not None
-            run_review(runner, pages, chunks, output_dir, work_root, template_dir, rules_path, args.overwrite)
+            run_review(
+                runner,
+                pages,
+                chunks,
+                output_dir,
+                work_root,
+                template_dir,
+                rules_path,
+                args.overwrite,
+                args.workers,
+            )
         if phase in {"assemble", "all", "full"}:
             assemble_book(output_dir, work_root, template_dir, rules_path, manifest, chunks, args.title)
         return 0
