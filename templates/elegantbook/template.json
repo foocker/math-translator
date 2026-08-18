@@ -1,0 +1,12 @@
+{
+  "id": "elegantbook",
+  "version": "4.7-2026.05.01",
+  "document_class": "elegantbook",
+  "document_class_line": "\\documentclass[cn,11pt,scheme=chinese]{elegantbook}",
+  "preamble_input": "preamble",
+  "assets": [
+    "elegantbook.cls",
+    "preamble.tex",
+    "AGENTS.md"
+  ]
+}

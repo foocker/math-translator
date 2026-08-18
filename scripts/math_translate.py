@@ -24,6 +24,7 @@ DEFAULT_CANDIDATES = TOOL_DIR / "candidates.json"
 DEFAULT_TERM_TABLE = TOOL_DIR / "dictionaries" / "english_chinese_math_terms.tsv"
 PLACEHOLDER_PREFIX = "@@MATH_TRANSLATOR_"
 SUPPORTED_SUFFIXES = {".md", ".markdown", ".tex", ".ltx"}
+INVALID_CONTROL_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 class TranslationError(RuntimeError):
@@ -218,26 +219,42 @@ class Glossary:
         return sorted(accepted, key=lambda item: item.start)
 
 
-def protect_markdown(text: str) -> ProtectedMarkdown:
+def protect_document(text: str, source_format: str) -> ProtectedMarkdown:
     if PLACEHOLDER_PREFIX in text:
         raise TranslationError(f"原文不能包含保留字符串 {PLACEHOLDER_PREFIX}")
+    if source_format not in {"Markdown", "LaTeX"}:
+        raise TranslationError(f"不支持的文档格式：{source_format}")
 
     tokens: dict[str, str] = {}
 
     def replace_pattern(value: str, pattern: re.Pattern[str]) -> str:
         def replacement(match: re.Match[str]) -> str:
+            inner_tokens = re.findall(r"@@MATH_TRANSLATOR_\d{6}@@", match.group(0))
+            if inner_tokens:
+                raise TranslationError(
+                    f"保护规则发生嵌套：{pattern.pattern} 包含 {', '.join(inner_tokens)}"
+                )
             token = f"{PLACEHOLDER_PREFIX}{len(tokens):06d}@@"
             tokens[token] = match.group(0)
             return token
 
         return pattern.sub(replacement, value)
 
-    patterns = [
-        re.compile(r"\A---\r?\n.*?\r?\n---(?:\r?\n|\Z)", re.DOTALL),
-        re.compile(r"^`{3,}[^\n]*\n.*?^`{3,}[ \t]*$", re.MULTILINE | re.DOTALL),
-        re.compile(r"^~{3,}[^\n]*\n.*?^~{3,}[ \t]*$", re.MULTILINE | re.DOTALL),
-        re.compile(r"<!--.*?-->", re.DOTALL),
-        re.compile(r"(?m)^[ \t]*%.*$"),
+    patterns: list[re.Pattern[str]] = []
+    if source_format == "Markdown":
+        patterns.extend(
+            [
+                re.compile(r"\A---\r?\n.*?\r?\n---(?:\r?\n|\Z)", re.DOTALL),
+                re.compile(r"^`{3,}[^\n]*\n.*?^`{3,}[ \t]*$", re.MULTILINE | re.DOTALL),
+                re.compile(r"^~{3,}[^\n]*\n.*?^~{3,}[ \t]*$", re.MULTILINE | re.DOTALL),
+                re.compile(r"<!--.*?-->", re.DOTALL),
+                re.compile(r"(?P<ticks>`+)(?!`)(?:.|\n)*?(?P=ticks)", re.DOTALL),
+            ]
+        )
+
+    # Protect large LaTeX containers before their possible inner constructs.
+    patterns.extend(
+        [
         re.compile(
             r"\\begin\{(?:lstlisting|minted|verbatim|Verbatim|tikzpicture|pgfpicture|pspicture)\}"
             r"(?:\[[^\]]*\])?(?:\{[^{}]*\})?"
@@ -247,28 +264,47 @@ def protect_markdown(text: str) -> ProtectedMarkdown:
         re.compile(r"(?<!\\)\$\$.*?(?<!\\)\$\$", re.DOTALL),
         re.compile(r"\\\[.*?\\\]", re.DOTALL),
         re.compile(
-            r"\\begin\{(?:equation\*?|align\*?|alignat\*?|gather\*?|multline\*?|cases|matrix|pmatrix|bmatrix|vmatrix|Vmatrix)\}"
-            r".*?\\end\{(?:equation\*?|align\*?|alignat\*?|gather\*?|multline\*?|cases|matrix|pmatrix|bmatrix|vmatrix|Vmatrix)\}",
+            r"\\begin\{(?:equation\*?|align\*?|alignat\*?|gather\*?|multline\*?)\}"
+            r".*?\\end\{(?:equation\*?|align\*?|alignat\*?|gather\*?|multline\*?)\}",
             re.DOTALL,
         ),
-        re.compile(r"(?P<ticks>`+)(?!`)(?:.|\n)*?(?P=ticks)", re.DOTALL),
+        re.compile(r"(?m)^[ \t]*%.*$"),
         re.compile(r"\\\(.*?\\\)", re.DOTALL),
         re.compile(r"(?<![\\$])\$(?!\$)(?:\\.|[^$\n])+?(?<!\\)\$"),
         re.compile(
-            r"\\(?:ref|eqref|autoref|cref|Cref|cite|citep|citet|label|url|href|input|include|includegraphics|bibliography|bibliographystyle)"
+            r"\\(?:ref|eqref|autoref|cref|Cref|cite|citep|citet|label|url|href|input|include|includegraphics|bibliography|bibliographystyle|textsuperscript)"
             r"\*?(?:\[[^\]]*\])?(?:\{[^{}]*\})+"
         ),
+        re.compile(r"\\S(?=~|\s|[{}.,;:!?)]|$)"),
         re.compile(r"\\(?:verb|lstinline)(.).*?\1"),
         re.compile(r"(?<=\]\()[^\n)]+(?=\))"),
         re.compile(r"<https?://[^>]+>"),
         re.compile(r"https?://[^\s)>]+"),
-        re.compile(r"</?[A-Za-z][^>]*>"),
-    ]
+        ]
+    )
+    if source_format == "Markdown":
+        patterns.append(re.compile(r"</?[A-Za-z][^>]*>"))
 
     protected = text
     for pattern in patterns:
         protected = replace_pattern(protected, pattern)
+
+    token_pattern = re.compile(r"@@MATH_TRANSLATOR_\d{6}@@")
+    for outer_token, original in tokens.items():
+        inner_tokens = token_pattern.findall(original)
+        if inner_tokens:
+            raise TranslationError(
+                f"保护规则发生嵌套：{outer_token} 包含 {', '.join(inner_tokens)}"
+            )
+    for token in tokens:
+        count = protected.count(token)
+        if count != 1:
+            raise TranslationError(f"保护标记 {token} 在预处理文本中出现 {count} 次，应为 1 次")
     return ProtectedMarkdown(protected, tokens)
+
+
+def protect_markdown(text: str) -> ProtectedMarkdown:
+    return protect_document(text, "Markdown")
 
 
 def chunk_markdown(text: str, max_chars: int) -> list[str]:
@@ -453,6 +489,10 @@ def tokens_in_chunk(chunk: str, tokens: dict[str, str]) -> list[str]:
 
 
 def validate_chunk_tokens(chunk: str, translation: str, tokens: dict[str, str]) -> None:
+    invalid_control = INVALID_CONTROL_PATTERN.search(translation)
+    if invalid_control:
+        codepoint = ord(invalid_control.group(0))
+        raise TranslationError(f"译文包含非法控制字符 U+{codepoint:04X}")
     for token in tokens_in_chunk(chunk, tokens):
         count = translation.count(token)
         if count != 1:
@@ -603,7 +643,8 @@ def translate_document(args: argparse.Namespace) -> int:
     if not input_path.exists():
         raise TranslationError(f"找不到输入文件：{input_path}")
     source = input_path.read_text(encoding="utf-8")
-    protected = protect_markdown(source)
+    source_format = source_format_for(input_path)
+    protected = protect_document(source, source_format)
     glossary = Glossary(
         Path(args.glossary).resolve(),
         args.domain,
@@ -616,7 +657,7 @@ def translate_document(args: argparse.Namespace) -> int:
         report = {
             "input": str(input_path),
             "domain": args.domain,
-            "format": source_format_for(input_path),
+            "format": source_format,
             "document_kind": args.document_kind,
             "protected_segments": len(protected.tokens),
             "active_terms": len(glossary.terms),
@@ -650,7 +691,7 @@ def translate_document(args: argparse.Namespace) -> int:
                 chunk,
                 chunk_matches,
                 args.domain,
-                source_format_for(input_path),
+                source_format,
                 args.document_kind,
                 retry_reason,
             )

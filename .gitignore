@@ -5,3 +5,8 @@ __pycache__/
 .ruff_cache/
 .venv/
 venv/
+output-simple/
+output/
+.env
+.env.*
+!.env.example

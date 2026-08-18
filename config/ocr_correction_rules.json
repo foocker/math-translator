@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "purpose": "Contextual guidance for the OCR-to-TeX agent. These are not automatic replacements.",
+  "decision_policy": [
+    "Never modify a source doc_N.md file.",
+    "Apply a repair only when local mathematical or linguistic context supports it.",
+    "Log every semantic repair with source page, before, after, reason, rule_id, and confidence.",
+    "If two readings remain plausible, preserve the OCR text and add an uncertainty instead of guessing."
+  ],
+  "rules": [
+    {
+      "id": "math-o-zero",
+      "category": "character_confusion",
+      "symptom": "The letter O and digit 0 are confused inside mathematics.",
+      "guidance": "Use equation semantics, nearby definitions, repeated notation, and operand type. Preserve standard big-O notation O(...).",
+      "unsafe_example": "Replacing every O with 0 by pattern.",
+      "status": "active"
+    },
+    {
+      "id": "math-subscript",
+      "category": "formula_structure",
+      "symptom": "A subscript marker, group, or comma-separated index is missing or attached to the wrong symbol.",
+      "guidance": "Compare repeated occurrences of the same symbol and the role of the index before repairing x i, x_i, x_{i,j}, or indexed roots.",
+      "status": "active"
+    },
+    {
+      "id": "math-superscript",
+      "category": "formula_structure",
+      "symptom": "An exponent or footnote marker is mistaken for ordinary baseline text.",
+      "guidance": "Distinguish mathematical powers from prose footnotes using the surrounding expression and repeated notation.",
+      "status": "active"
+    },
+    {
+      "id": "math-root-fraction",
+      "category": "formula_structure",
+      "symptom": "OCR produces unbalanced or incorrectly nested sqrt, frac, numerator, denominator, or root-index groups.",
+      "guidance": "Repair only when balancing delimiters and mathematical equivalence are supported by adjacent derivation or repeated formulae.",
+      "status": "active"
+    },
+    {
+      "id": "math-delimiters",
+      "category": "formula_structure",
+      "symptom": "Parentheses, braces, brackets, absolute-value bars, or display-math delimiters are missing or mismatched.",
+      "guidance": "Balance TeX syntax while preserving the intended mathematical grouping; report any semantic delimiter change.",
+      "status": "active"
+    },
+    {
+      "id": "math-symbol-command",
+      "category": "character_confusion",
+      "symptom": "A mathematical symbol is recognized as a visually similar letter or malformed TeX command.",
+      "guidance": "Use the domain context and repeated notation. Typical candidates include l/1, I/l, nu/v, rho/p, epsilon/e, minus/dash, and prime/apostrophe.",
+      "status": "active"
+    },
+    {
+      "id": "prose-mojibake",
+      "category": "text_encoding",
+      "symptom": "Names, quotation marks, apostrophes, dashes, or accented words contain obvious mojibake.",
+      "guidance": "Repair only recognizable encoding corruption. Preserve uncertain proper names and report them for review.",
+      "status": "active"
+    },
+    {
+      "id": "page-break-join",
+      "category": "layout",
+      "symptom": "A sentence, word, formula, list item, theorem, or proof is split across adjacent OCR pages.",
+      "guidance": "Use neighboring pages to join the structure once. Do not duplicate either side of the page boundary.",
+      "status": "active"
+    },
+    {
+      "id": "heading-level",
+      "category": "document_structure",
+      "symptom": "OCR Markdown heading depth does not match the semantic chapter/section hierarchy.",
+      "guidance": "Infer TeX chapter, section, subsection, appendix, theorem-like block, or unnumbered heading from the document hierarchy and table of contents.",
+      "status": "active"
+    },
+    {
+      "id": "figure-association",
+      "category": "layout",
+      "symptom": "An image, caption, or group of related images is separated or ordered incorrectly.",
+      "guidance": "Associate captions using page order and labels. Use one figure for a single image and minipages only for genuinely related side-by-side images.",
+      "status": "active"
+    }
+  ]
+}
