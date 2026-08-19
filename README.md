@@ -87,7 +87,7 @@ python scripts/ocr_to_tex_agent.py --output-dir output/abel-test --phase full
 ```
 
 转换和审校分块默认使用 3 路并发；可按机器和 API 限流调整，例如 `--workers 2`。
-页面分类只读取开头和结尾的边界窗口，中间页面使用预览并按范围归入正文；已有 `agent-work/page_manifest.json` 时会直接复用，不会重复调用分类 Agent。
+页面边界使用本地正则扫描开头和结尾，不调用 Agent；中间页面直接按范围归入正文。目录结构 Agent 只读取检测出的目录页，并生成章节、小节和对应 `doc_N.md` 范围。
 
 如果使用 Git Bash，换行续行符必须使用反斜杠 `\`，不要使用 PowerShell 的反引号 `` ` ``：
 
@@ -98,23 +98,14 @@ python scripts/ocr_to_tex_agent.py \
   --workers 3
 ```
 
-如果只需要快速做 Markdown 到 TeX 的格式映射，不需要 Agent 进行语义修复，可以使用本地转换器：
-
-```bash
-python scripts/ocr_to_tex_agent.py \
-  --output-dir output/safa \
-  --phase convert \
-  --converter local \
-  --overwrite
-```
-
-`local` 模式不会调用 Codex，只映射标题、段落、列表、公式和原始图片浮动体，并写入空修复报告；`agent` 模式保留完整语义转换流程。
-
 常用阶段：
 
 ```powershell
-# 只分类页面
+# 只生成首尾边界清单
 python scripts/ocr_to_tex_agent.py --phase classify
+
+# 从目录页生成章节与小节清单
+python scripts/ocr_to_tex_agent.py --phase outline
 
 # 转换章节
 python scripts/ocr_to_tex_agent.py --phase convert
@@ -149,6 +140,10 @@ python scripts/ocr_to_tex_agent.py --phase full --safe-agent
 ```
 
 重新生成已有章节或审校结果时才添加 `--overwrite`。正常续跑不要添加该参数。
+`convert --overwrite` 只重做章节分块，不会重新调用目录 Agent。需要重建目录清单时，单独执行 `--phase outline --overwrite`。
+
+转换阶段会拒绝三类常见的版面错误：残留 HTML 表格、`\\caption{Image}` 占位标题，以及把整段正文包进 `\\text{...}` 的不可断行文本。遇到这些问题时，使用已有 OCR 和目录清单重做 `convert` 即可，不需要重新执行 OCR；原始 `doc_N.md` 不会被修改。
+每个转换分块还会使用真实 ElegantBook 模板单独运行 XeLaTeX。数学模式、表格列数、环境嵌套或定界符错误会连同编译日志交回 Agent，最多自动修复三轮；未通过编译检查的分块不能进入 `assemble`。
 
 ### 中文原书
 

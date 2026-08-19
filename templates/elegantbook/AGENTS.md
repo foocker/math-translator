@@ -13,45 +13,37 @@ language. Translation is a later, independent and optional stage.
   heading, caption, or image association crosses a page boundary.
 - Do not invent missing mathematical content. Record unresolved ambiguity.
 
-## Classification Mode
-
-- Determine the two retained-content boundaries first: scan from the
-  beginning for contents/body start, and scan backward from the end for the
-  bibliography boundary. Do not semantically inspect every middle page.
-- Classify every supplied `doc_N.md` exactly once after those boundaries are
-  known; pages strictly between them are body by range.
-- Discard all pages before the actual table of contents as `front_matter`.
-- Mark the first table-of-contents page as `contents` and further OCR contents
-  pages or separator pages as `contents_continuation`.
-- Start `body` at the first genuine retained prose page after the complete
-  contents. A preface or introduction after the contents is body.
-- The page headed Bibliography, References, 参考文献, or a clear equivalent is
-  `bibliography` and is excluded. Everything later is `back_matter`.
-- Keyword occurrences inside prose or inside the table of contents are not end
-  boundaries. Use heading role and document order.
-
 ## Conversion Mode
 
 - Produce TeX body fragments only. Root document commands belong to the
   orchestrator.
-- Preserve semantic hierarchy. Infer `\chapter`, `\section`, `\subsection`,
-  appendix structure, unnumbered headings, theorem-like blocks, proofs,
+- Preserve semantic hierarchy inside the assigned chapter. Infer `\section`,
+  `\subsection`, appendix structure, unnumbered headings, theorem-like blocks, proofs,
   exercises, lists, tables, and captions from the whole local context. OCR
   Markdown `#` depth is evidence, not an absolute mapping.
 - Preserve mathematical meaning, quantifiers, negations, notation, equation
   order, and proof dependencies.
-- Convert inline and display mathematics to valid TeX. Repair malformed OCR
-  only when context provides evidence.
-- Read `ocr_correction_rules.json`. It is a reasoning checklist, not a list of
-  automatic substitutions. Log every semantic repair in the chunk report.
-- Never perform global O/0, l/1, subscript, superscript, punctuation, command,
-  or encoding replacement.
-- Preserve uncertain OCR text and record it under `uncertainties`.
+- Convert inline and display mathematics to valid TeX without correcting the
+  OCR source content. Do not perform spelling, symbol, O/0, l/1, subscript,
+  superscript, punctuation, command, or encoding replacement.
+- Never wrap an entire prose paragraph in `\text{...}`. Prose must remain
+  ordinary TeX text; reserve `\text{...}` for short words inside a math
+  expression. Keep inline math short and split long display expressions with
+  `aligned`, `gathered`, or equivalent breakable environments.
+- Convert every HTML table to real TeX (`table` plus `tabular`, `array`, or a
+  width-constrained equivalent). Never leave `<table>`, `<tr>`, or `<td>` in
+  the TeX output. Wide tables must fit `\linewidth` using a smaller font,
+  flexible columns, or `\resizebox{\linewidth}{!}{...}`.
 
 ## Figures
 
 - Keep final asset paths relative to the book root, normally `imgs/<file>`.
 - Use a `figure` float for a genuine figure and associate its visible caption.
+- Preserve captions and labels such as “图 3.1” from nearby OCR text. Never
+  invent a caption such as `Image`; if no caption is present, omit `\caption`.
+- Images must be constrained by `\linewidth` or `\textwidth`; do not use
+  source pixel dimensions as TeX dimensions and do not allow a figure to
+  exceed the text block.
 - Use `minipage` only for images that are semantically related and intended to
   be viewed side by side. Mere adjacency in OCR output is insufficient.
 - Do not redraw or reinterpret a mathematical diagram during this stage.
@@ -61,7 +53,7 @@ language. Translation is a later, independent and optional stage.
 
 - Compare the candidate TeX against every owned source page and neighboring
   boundary context.
-- Prioritize omitted/duplicated content, incorrect formula repair, broken
+- Prioritize omitted/duplicated content, incorrect formula mapping, broken
   hierarchy, page-boundary joins, incorrect figures, and invalid TeX.
 - Correct supported issues in `reviewed.tex`; record each finding and retain
   unresolved ambiguity.
