@@ -143,7 +143,8 @@ python scripts/ocr_to_tex_agent.py --phase full --safe-agent
 `convert --overwrite` 只重做章节分块，不会重新调用目录 Agent。需要重建目录清单时，单独执行 `--phase outline --overwrite`。
 
 转换阶段会拒绝三类常见的版面错误：残留 HTML 表格、`\\caption{Image}` 占位标题，以及把整段正文包进 `\\text{...}` 的不可断行文本。遇到这些问题时，使用已有 OCR 和目录清单重做 `convert` 即可，不需要重新执行 OCR；原始 `doc_N.md` 不会被修改。
-每个转换分块还会使用真实 ElegantBook 模板单独运行 XeLaTeX。数学模式、表格列数、环境嵌套或定界符错误会连同编译日志交回 Agent，最多自动修复三轮；未通过编译检查的分块不能进入 `assemble`。
+
+上面执行完了基本都产出了，这样还有啥编译问题，就让codex根据问题修复一下就行。 
 
 ### 中文原书
 

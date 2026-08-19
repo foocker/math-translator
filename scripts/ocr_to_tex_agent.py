@@ -764,65 +764,6 @@ def content_completeness(tex_path: Path, chunk: Chunk) -> dict[str, Any]:
     }
 
 
-def compile_chunk_fragment(
-    output_dir: Path,
-    work_root: Path,
-    chunk: Chunk,
-    tex_path: Path,
-) -> dict[str, Any]:
-    """Compile one fragment in the real template and return concise diagnostics."""
-    xelatex = shutil.which("xelatex")
-    if xelatex is None:
-        return {"passed": True, "skipped": "xelatex-not-found", "errors": []}
-    check_dir = work_root / "compile-checks" / chunk.chunk_id
-    check_dir.mkdir(parents=True, exist_ok=True)
-    candidate = check_dir / "candidate.tex"
-    shutil.copy2(tex_path, candidate)
-    root = check_dir / "check.tex"
-    root.write_text(
-        "\\documentclass[cn,11pt,scheme=chinese]{elegantbook}\n"
-        "\\input{preamble}\n"
-        "\\begin{document}\n"
-        "\\chapter{Compile Check}\n"
-        f"\\input{{{candidate.relative_to(output_dir).as_posix()}}}\n"
-        "\\end{document}\n",
-        encoding="utf-8",
-        newline="",
-    )
-    completed = subprocess.run(
-        [
-            xelatex,
-            "-interaction=nonstopmode",
-            "-halt-on-error",
-            f"-output-directory={check_dir}",
-            str(root),
-        ],
-        cwd=output_dir,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        timeout=180,
-        check=False,
-    )
-    output = completed.stdout or ""
-    (check_dir / "compile.stdout.log").write_text(output, encoding="utf-8")
-    error_lines: list[str] = []
-    lines = output.splitlines()
-    for index, line in enumerate(lines):
-        if line.startswith("!"):
-            error_lines.extend(lines[index : index + 6])
-            if len(error_lines) >= 36:
-                break
-    return {
-        "passed": completed.returncode == 0,
-        "returncode": completed.returncode,
-        "errors": error_lines,
-        "log": str((check_dir / "compile.stdout.log").relative_to(output_dir)),
-    }
-
-
 def stage_chunk_sources(
     run_dir: Path,
     output_dir: Path,
@@ -873,7 +814,6 @@ def write_chunks_index(work_root: Path, chunks: Sequence[Chunk]) -> Path:
 
 
 def recover_latest_chunk_artifacts(
-    output_dir: Path,
     work_root: Path,
     chunk: Chunk,
     final_tex: Path,
@@ -900,11 +840,7 @@ def recover_latest_chunk_artifacts(
             continue
         if not audit["passed"]:
             continue
-        compile_result = compile_chunk_fragment(output_dir, work_root, chunk, tex_path)
-        if not compile_result["passed"]:
-            continue
         report["completeness"] = audit
-        report["compile_check"] = compile_result
         write_json(report_path, report)
         shutil.copy2(tex_path, final_tex)
         shutil.copy2(report_path, final_report)
@@ -951,29 +887,20 @@ def run_conversion(
                 print(f"已有分块无效，将重新生成 {chunk.chunk_id}：{exc}", file=sys.stderr)
             else:
                 audit = content_completeness(final_tex, chunk)
-                compile_result = compile_chunk_fragment(
-                    output_dir, work_root, chunk, final_tex
-                )
-                if audit["passed"] and compile_result["passed"]:
+                if audit["passed"]:
                     if existing_report.get("completeness") != audit:
                         existing_report["completeness"] = audit
-                    existing_report["compile_check"] = compile_result
                     write_json(final_report, existing_report)
                     print(f"跳过已有分块 {position}/{len(chunks)}：{chunk.chunk_id}", file=sys.stderr)
                     return chunk.chunk_id
-                if not compile_result["passed"]:
-                    print(
-                        f"TeX 编译检查失败，将重新修复 {chunk.chunk_id}",
-                        file=sys.stderr,
-                    )
                 if not audit["passed"]:
                     print(
-                        f"完整度不足，重新修复 {chunk.chunk_id}："
+                        f"完整度不足，将重新转换 {chunk.chunk_id}："
                         f"覆盖率 {audit['overall_coverage']:.1%}，缺失页 {audit['missing_pages']}",
                         file=sys.stderr,
                     )
         if not overwrite and recover_latest_chunk_artifacts(
-            output_dir, work_root, chunk, final_tex, final_report
+            work_root, chunk, final_tex, final_report
         ):
             return chunk.chunk_id
         run_dir = timestamped_run_dir(work_root, chunk.chunk_id)
@@ -996,42 +923,15 @@ def run_conversion(
         runner.run(run_dir, conversion_prompt)
         generated_tex = run_dir / "chunk.tex"
         report_path = run_dir / "chunk.report.json"
-        audit: dict[str, Any] = {}
-        compile_result: dict[str, Any] = {}
-        for repair_attempt in range(4):
-            validate_chunk_artifacts(generated_tex, report_path, chunk)
-            audit = content_completeness(generated_tex, chunk)
-            compile_result = compile_chunk_fragment(
-                output_dir, work_root, chunk, generated_tex
+        validate_chunk_artifacts(generated_tex, report_path, chunk)
+        audit = content_completeness(generated_tex, chunk)
+        if not audit["passed"]:
+            raise AgentPipelineError(
+                f"转换分块完整度不足：{chunk.chunk_id}，"
+                f"覆盖率 {audit['overall_coverage']:.1%}，缺失页 {audit['missing_pages']}"
             )
-            if audit["passed"] and compile_result["passed"]:
-                break
-            if repair_attempt == 3:
-                raise AgentPipelineError(
-                    f"Agent 三轮修复后仍未通过：{chunk.chunk_id}，"
-                    f"覆盖率 {audit['overall_coverage']:.1%}，缺失页 {audit['missing_pages']}，"
-                    f"编译通过={compile_result['passed']}"
-                )
-            repair_prompt = conversion_prompt + f"""
-
-Automated validation rejected the current candidate. Repair the existing
-chunk.tex and chunk.report.json without shortening or translating the source.
-Source-token coverage is {audit['overall_coverage']:.3f}; insufficient pages
-are {audit['missing_pages']}. Restore omitted prose, formulas, lists, tables,
-theorem blocks, and figures when needed.
-The XeLaTeX compile check passed={compile_result['passed']}. Its current errors are:
-{json.dumps(compile_result['errors'], ensure_ascii=False)}
-Fix every reported TeX syntax, math-mode, alignment, environment-nesting, and
-delimiter error. Re-read the relevant source pages before editing.
-"""
-            print(
-                f"自动验收未通过，启动 Agent 修复 {repair_attempt + 1}/3：{chunk.chunk_id}",
-                file=sys.stderr,
-            )
-            runner.run(run_dir, repair_prompt)
         report = read_json(report_path)
         report["completeness"] = audit
-        report["compile_check"] = compile_result
         write_json(report_path, report)
         shutil.copy2(run_dir / "chunk.tex", final_tex)
         shutil.copy2(report_path, final_report)
@@ -1261,19 +1161,7 @@ def assemble_book(
             if not chunk_path.is_file():
                 raise AgentPipelineError(f"缺少转换分块：{chunk_path}")
             report_path = work_root / "reports" / f"{chunk.chunk_id}.json"
-            report = validate_chunk_artifacts(chunk_path, report_path, chunk)
-            compile_result = report.get("compile_check")
-            if not isinstance(compile_result, dict) or not compile_result.get("passed"):
-                compile_result = compile_chunk_fragment(
-                    output_dir, work_root, chunk, chunk_path
-                )
-                report["compile_check"] = compile_result
-                write_json(report_path, report)
-            if not compile_result.get("passed"):
-                raise AgentPipelineError(
-                    f"分块尚未通过 XeLaTeX 编译检查：{chunk.chunk_id}；"
-                    "请先执行 --phase convert 续跑修复"
-                )
+            validate_chunk_artifacts(chunk_path, report_path, chunk)
             assert chunk.chapter_number is not None and chunk.chapter_title is not None
             grouped.setdefault(chunk.chapter_number, []).append(chunk)
             titles[chunk.chapter_number] = chunk.chapter_title
