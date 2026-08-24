@@ -108,6 +108,19 @@ output/book-zh.pdf
 
 `translator.sh` 中的书名和数学领域是示例配置，处理其他书籍前按实际内容调整。
 
+## 词典格式
+
+运行时默认读取 `dictionaries/merged.json`。它是由 `dictionaries/merged.md` 转换得到的 JSON key-value 词典；英文开头的行生成新 key，中文或标点开头的换行会接到上一条 value 后面。
+
+如需从新的 OCR 合并稿重建词典：
+
+```bash
+python scripts/convert_dictionary.py dictionaries/merged.md \
+  --format merged-md -o dictionaries/merged.json
+```
+
+`--term-table` 仍接受外部 JSON 或 TSV 文件，但仓库不再依赖旧的 `english_chinese_math_terms.*` 文件。
+
 ## 示例产物
 
 完整 PDF 位于 [`test_outputs/`](test_outputs/)：

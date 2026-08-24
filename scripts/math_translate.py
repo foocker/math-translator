@@ -21,7 +21,7 @@ from typing import Any, Iterable, Sequence
 TOOL_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_GLOSSARY = TOOL_DIR / "glossary.json"
 DEFAULT_CANDIDATES = TOOL_DIR / "candidates.json"
-DEFAULT_TERM_TABLE = TOOL_DIR / "dictionaries" / "english_chinese_math_terms.tsv"
+DEFAULT_TERM_TABLE = TOOL_DIR / "dictionaries" / "merged.json"
 PLACEHOLDER_PREFIX = "@@MATH_TRANSLATOR_"
 SUPPORTED_SUFFIXES = {".md", ".markdown", ".tex", ".ltx"}
 INVALID_CONTROL_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -94,19 +94,49 @@ def normalize_term_table_source(source: str) -> str:
     return source
 
 
+def _iter_json_term_table(path: Path) -> Iterable[tuple[str, str]]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise TranslationError(f"词典 JSON 格式错误：{path}: {exc}") from exc
+
+    raw_terms: Any = payload
+    if isinstance(payload, dict) and "terms" in payload:
+        raw_terms = payload["terms"]
+    if isinstance(raw_terms, dict):
+        items = raw_terms.items()
+    elif isinstance(raw_terms, list):
+        items = (
+            (item.get("source"), item.get("target"))
+            for item in raw_terms
+            if isinstance(item, dict)
+        )
+    else:
+        raise TranslationError(f"词典 JSON 必须是 key-value 对象或 terms 数组：{path}")
+    for source, target in items:
+        if source is None or target is None:
+            continue
+        yield str(source), str(target)
+
+
 def iter_term_table(path: Path) -> Iterable[tuple[str, str]]:
     if not path.exists():
         return
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except UnicodeDecodeError:
-        lines = path.read_text(encoding="utf-8-sig", errors="replace").splitlines()
-    for index, line in enumerate(lines):
-        if index == 0 and line.casefold().startswith("english\t"):
-            continue
-        if not line.strip() or "\t" not in line:
-            continue
-        source, target = line.split("\t", 1)
+    if path.suffix.casefold() == ".json":
+        rows = _iter_json_term_table(path)
+    else:
+        try:
+            lines = path.read_text(encoding="utf-8-sig").splitlines()
+        except UnicodeDecodeError:
+            lines = path.read_text(encoding="utf-8-sig", errors="replace").splitlines()
+        rows = []
+        for index, line in enumerate(lines):
+            if index == 0 and line.casefold().startswith("english\t"):
+                continue
+            if not line.strip() or "\t" not in line:
+                continue
+            rows.append(line.split("\t", 1))
+    for source, target in rows:
         source = normalize_term_table_source(source)
         target = re.sub(r"\s+", "", target.strip())
         if source and target and not re.search(r"[\u4e00-\u9fff]", source):
@@ -740,13 +770,13 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--term-table",
         action="append",
-        help="补充 TSV 英汉词表，可重复传入；默认使用 tools/pure-math-translator/dictionaries/english_chinese_math_terms.tsv（如存在）",
+        help="补充 JSON/TSV 英汉词表，可重复传入；默认使用 dictionaries/merged.json",
     )
-    parser.add_argument("--no-term-table", action="store_true", help="不加载补充 TSV 词表")
+    parser.add_argument("--no-term-table", action="store_true", help="不加载补充词表")
     parser.add_argument(
         "--term-table-single-word",
         action="store_true",
-        help="允许补充 TSV 中较长且首字母大写的单词词条生效；默认只使用多词或带连字符词条",
+        help="允许补充词典中较长且首字母大写的单词词条生效；默认只使用多词或带连字符词条",
     )
     parser.add_argument("--candidates", default=str(DEFAULT_CANDIDATES), help="候选术语库 JSON")
     parser.add_argument(

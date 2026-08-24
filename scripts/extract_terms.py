@@ -159,9 +159,9 @@ def make_parser() -> argparse.ArgumentParser:
         help="document type metadata; accepted for consistency with math_translate.py",
     )
     parser.add_argument("--glossary", default=str(DEFAULT_GLOSSARY), help="approved glossary JSON")
-    parser.add_argument("--term-table", action="append", help="supplemental TSV dictionary; repeatable")
-    parser.add_argument("--no-term-table", action="store_true", help="disable supplemental TSV dictionary")
-    parser.add_argument("--term-table-single-word", action="store_true", help="allow selected single-word TSV terms")
+    parser.add_argument("--term-table", action="append", help="supplemental JSON/TSV dictionary; repeatable")
+    parser.add_argument("--no-term-table", action="store_true", help="disable supplemental dictionary")
+    parser.add_argument("--term-table-single-word", action="store_true", help="allow selected single-word dictionary terms")
     parser.add_argument("--min-occurrences", type=int, default=1, help="minimum occurrences for reported terms")
     parser.add_argument("--max-terms", type=int, default=300, help="maximum terms to report")
     parser.add_argument("--format", choices=["json", "md"], default="md", help="output format")

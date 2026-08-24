@@ -28,7 +28,7 @@ It adapts those rules for pure mathematics and books:
 2. Preserve formulas and proof logic more strictly than general academic prose.
 3. Support `.md` and `.tex` inputs, not only arXiv source.
 4. Support long book chapters or lecture notes where chapter/section consistency matters.
-5. Use the embedded math glossary and the supplemental English-Chinese mathematical TSV dictionary as hard terminology constraints, but never load the full dictionary into model context.
+5. Use the embedded math glossary and the supplemental English-Chinese mathematical JSON dictionary as hard terminology constraints, but never load the full dictionary into model context.
 
 ## Required References
 
@@ -46,7 +46,7 @@ If compiling TeX or preparing a translated TeX project, also read:
 
 ### Local Single Markdown or TeX File
 
-Use the script backend first. The script automatically searches the embedded glossary and TSV dictionary against the source, then passes only matched terminology to the model as hard constraints:
+Use the script backend first. The script automatically searches the embedded glossary and JSON dictionary against the source, then passes only matched terminology to the model as hard constraints:
 
 ```powershell
 python tools/pure-math-translator/scripts/math_translate.py INPUT_FILE --document-kind paper --domain DOMAIN

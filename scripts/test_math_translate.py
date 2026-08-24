@@ -112,6 +112,18 @@ print("do not translate")
             matches = glossary.find("A locally compact group acts on a ring.")
         self.assertEqual([item.term.source for item in matches], ["locally compact group"])
 
+    def test_json_term_table_accepts_key_value_terms(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            table = root / "terms.json"
+            table.write_text(
+                json.dumps({"version": 1, "terms": {"locally compact group": "局部紧群", "ring": "环"}}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            glossary = Glossary(self.make_glossary(root), term_tables=[table])
+            matches = glossary.find("A locally compact group acts on a ring.")
+        self.assertEqual([item.term.source for item in matches], ["locally compact group"])
+
     def test_protects_latex_code_and_reference_commands(self) -> None:
         source = r"""\section{Main theorem}
 See \cite{serre1977} and \input{chapters/intro}.
