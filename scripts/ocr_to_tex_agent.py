@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 import re
+import signal
 import shutil
 import subprocess
 import sys
@@ -106,25 +107,55 @@ class CodexRunner:
         )
         if not self.dangerously_bypass:
             command[command.index("exec") + 1:command.index("exec") + 1] = ["--sandbox", "workspace-write"]
-        try:
-            completed = subprocess.run(
+        stdout_path = workdir / "codex.stdout.log"
+        stderr_path = workdir / "codex.stderr.log"
+        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        with stdout_path.open("w", encoding="utf-8", newline="") as stdout_file, stderr_path.open(
+            "w", encoding="utf-8", newline=""
+        ) as stderr_file:
+            process = subprocess.Popen(
                 command,
-                input=prompt,
+                stdin=subprocess.PIPE,
+                stdout=stdout_file,
+                stderr=stderr_file,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=self.timeout,
-                check=False,
+                creationflags=creationflags,
+                start_new_session=(os.name != "nt"),
             )
-        except subprocess.TimeoutExpired as exc:
-            raise AgentPipelineError(f"Codex Agent 超时（{self.timeout} 秒）：{workdir.name}") from exc
-        (workdir / "codex.stdout.log").write_text(completed.stdout or "", encoding="utf-8")
-        (workdir / "codex.stderr.log").write_text(completed.stderr or "", encoding="utf-8")
-        if completed.returncode != 0:
-            detail = (completed.stderr or completed.stdout).strip()[-3000:]
-            raise AgentPipelineError(f"Codex Agent 失败（退出码 {completed.returncode}）：\n{detail}")
+            try:
+                process.communicate(prompt, timeout=self.timeout)
+            except subprocess.TimeoutExpired as exc:
+                # Kill the process tree. Descendant Codex/node processes may
+                # otherwise keep inherited handles open and strand the parent.
+                if os.name == "nt":
+                    subprocess.run(
+                        ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                    )
+                else:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                process.wait(timeout=30)
+                if final_message.is_file() and final_message.read_text(encoding="utf-8", errors="replace").strip():
+                    print(
+                        f"Codex Agent 达到超时但已写入最终消息，保留 run 供恢复：{workdir.name}",
+                        file=sys.stderr,
+                    )
+                    return
+                raise AgentPipelineError(f"Codex Agent 超时（{self.timeout} 秒）：{workdir.name}") from exc
+        if process.returncode is None:
+            raise AgentPipelineError(f"Codex Agent 未能结束：{workdir.name}")
+        if process.returncode != 0:
+            detail = stderr_path.read_text(encoding="utf-8", errors="replace").strip()[-3000:]
+            if not detail:
+                detail = stdout_path.read_text(encoding="utf-8", errors="replace").strip()[-3000:]
+            raise AgentPipelineError(f"Codex Agent 失败（退出码 {process.returncode}）：\n{detail}")
 
 
 def discover_pages(output_dir: Path, page_count: int | None = None) -> list[SourcePage]:
@@ -410,7 +441,13 @@ Required behavior:
   and trailing page numbers that are not part of the title.
 - Map every chapter directly to inclusive OCR doc_N page bounds. Use printed
   page numbers, page order, and matching evidence in body_page_index.json.
-- Chapter ranges must be ordered, non-overlapping, and contiguous. The final
+- The PDF may be assembled from non-consecutive excerpts of the original
+  book. If a TOC chapter has no body pages anywhere in the staged OCR input,
+  keep the chapter and its sections but set both chapter OCR bounds and all
+  section OCR starts to null. Never assign neighboring pages to fill a missing
+  original chapter.
+- Available chapter ranges must be ordered, non-overlapping, and contiguous in
+  OCR doc_N order after null-range chapters are skipped. The final available
   chapter ends immediately before page_manifest.end_page_excluded when that
   boundary is present.
 - Use null when a printed page number, section OCR start, or body-end item is
@@ -432,6 +469,7 @@ def validate_chapter_manifest(
         raise AgentPipelineError(f"chapter_manifest.json 的章节编号必须连续：{expected_numbers}")
     page_numbers = {page.number for page in pages}
     previous_end: int | None = None
+    available_chapters = 0
     for chapter in chapters:
         if not isinstance(chapter.get("title"), str) or not chapter["title"].strip():
             raise AgentPipelineError("chapter_manifest.json 包含空章名")
@@ -439,17 +477,25 @@ def validate_chapter_manifest(
             raise AgentPipelineError("chapter_manifest.json 章节印刷页码无效")
         start = chapter.get("ocr_start_page")
         end = chapter.get("ocr_end_page")
-        if not isinstance(start, int) or not isinstance(end, int) or start > end:
-            raise AgentPipelineError("chapter_manifest.json 缺少有效 OCR 起止页")
-        if start not in page_numbers or end not in page_numbers:
-            raise AgentPipelineError("chapter_manifest.json 章节范围引用了不存在的 OCR 页面")
-        if any(number not in page_numbers for number in range(start, end + 1)):
-            raise AgentPipelineError("chapter_manifest.json 章节范围包含缺失的 OCR 页面")
-        if start < manifest["body_start_page"]:
-            raise AgentPipelineError("chapter_manifest.json 章节起点位于正文边界之前")
-        if previous_end is not None and start != previous_end + 1:
-            raise AgentPipelineError("chapter_manifest.json 章节范围必须连续且不重叠")
-        previous_end = end
+        # A PDF assembled from selected book excerpts may list a chapter in
+        # the TOC while containing none of its pages. Represent that chapter
+        # explicitly with null bounds; real ranges must still be contiguous.
+        missing_chapter = start is None and end is None
+        if (start is None) != (end is None):
+            raise AgentPipelineError("chapter_manifest.json OCR 起止页必须同时为整数或 null")
+        if not missing_chapter:
+            available_chapters += 1
+            if not isinstance(start, int) or not isinstance(end, int) or start > end:
+                raise AgentPipelineError("chapter_manifest.json 缺少有效 OCR 起止页")
+            if start not in page_numbers or end not in page_numbers:
+                raise AgentPipelineError("chapter_manifest.json 章节范围引用了不存在的 OCR 页面")
+            if any(number not in page_numbers for number in range(start, end + 1)):
+                raise AgentPipelineError("chapter_manifest.json 章节范围包含缺失的 OCR 页面")
+            if start < manifest["body_start_page"]:
+                raise AgentPipelineError("chapter_manifest.json 章节起点位于正文边界之前")
+            if previous_end is not None and start != previous_end + 1:
+                raise AgentPipelineError("chapter_manifest.json 章节范围必须连续且不重叠")
+            previous_end = end
         sections = chapter.get("sections")
         if not isinstance(sections, list):
             raise AgentPipelineError("chapter_manifest.json 缺少章节小节清单")
@@ -460,12 +506,22 @@ def validate_chapter_manifest(
                 raise AgentPipelineError("chapter_manifest.json 小节印刷页码无效")
             section_start = section.get("ocr_start_page")
             if section_start is not None and (
-                not isinstance(section_start, int) or not start <= section_start <= end
+                not isinstance(section_start, int)
+                or missing_chapter
+                or not start <= section_start <= end
             ):
                 raise AgentPipelineError("chapter_manifest.json 小节 OCR 起点不属于所在章节")
-    expected_end = manifest.get("end_page_excluded")
-    if isinstance(expected_end, int) and previous_end != expected_end - 1:
+    if available_chapters == 0:
+        raise AgentPipelineError("chapter_manifest.json 没有可转换的 OCR 章节")
+    available_body_pages = body_pages_from_manifest(manifest, pages)
+    if previous_end != available_body_pages[-1].number:
         raise AgentPipelineError("chapter_manifest.json 最后一章未覆盖到正文结束边界")
+    first_available = next(
+        chapter for chapter in chapters if chapter.get("ocr_start_page") is not None
+    )
+    if first_available["ocr_start_page"] != available_body_pages[0].number:
+        raise AgentPipelineError("chapter_manifest.json 第一段可用章节未从正文起点开始")
+    expected_end = manifest.get("end_page_excluded")
     body_end = value.get("body_end")
     if not isinstance(body_end, dict):
         raise AgentPipelineError("chapter_manifest.json 缺少正文结束标记")
@@ -504,6 +560,25 @@ def run_outline_agent(
         else:
             print(f"沿用目录章节清单：{outline_path}", file=sys.stderr)
             return outline
+    # A previous Codex process may have timed out after writing its artifact.
+    # Import the newest valid result before starting another expensive call.
+    if not overwrite:
+        for candidate in sorted(
+            (path for path in (work_root / "runs").glob("outline-*") if path.is_dir()),
+            key=lambda path: path.name,
+            reverse=True,
+        ):
+            artifact = candidate / "chapter_manifest.json"
+            if not artifact.is_file():
+                continue
+            try:
+                recovered = read_json(artifact)
+                validate_chapter_manifest(recovered, manifest, pages)
+            except (AgentPipelineError, OSError, ValueError):
+                continue
+            write_json(outline_path, recovered)
+            print(f"恢复最近一次目录章节清单：{artifact}", file=sys.stderr)
+            return recovered
     run_dir = timestamped_run_dir(work_root, "outline")
     copy_common_agent_context(run_dir, template_dir)
     for page in toc_pages:
@@ -533,6 +608,8 @@ def plan_chapter_chunks(
     page_map = {page.number: page for page in pages}
     chunks: list[Chunk] = []
     for chapter in chapters:
+        if chapter.get("ocr_start_page") is None and chapter.get("ocr_end_page") is None:
+            continue
         chapter_pages = [
             page_map[number]
             for number in range(chapter["ocr_start_page"], chapter["ocr_end_page"] + 1)
@@ -1107,8 +1184,11 @@ def existing_chapter_artifacts(
     input_lines: list[str] = []
     chapter_ranges: list[dict[str, Any]] = []
     chapter_reports: list[str] = []
+    previous_number = 0
     for chapter in outline["chapters"]:
         number = chapter["number"]
+        if chapter.get("ocr_start_page") is None and chapter.get("ocr_end_page") is None:
+            continue
         chapter_id = f"chapter_{number:02d}"
         chapter_path = output_dir / "chapters" / f"{chapter_id}.tex"
         if not chapter_path.is_file():
@@ -1116,9 +1196,12 @@ def existing_chapter_artifacts(
         chapter_tex = chapter_path.read_text(encoding="utf-8", errors="replace")
         if not chapter_tex.strip():
             raise AgentPipelineError(f"已有章节文件为空：{chapter_path}")
+        if number != previous_number + 1:
+            input_lines.append(f"\\setcounter{{chapter}}{{{number - 1}}}")
         if not re.search(r"\\chapter\*?\s*\{", chapter_tex):
             input_lines.append(f"\\chapter{{{tex_escape(chapter['title'])}}}")
         input_lines.append(f"\\input{{chapters/{chapter_id}}}")
+        previous_number = number
         chapter_ranges.append(
             {
                 "number": number,
@@ -1165,15 +1248,21 @@ def assemble_book(
             assert chunk.chapter_number is not None and chunk.chapter_title is not None
             grouped.setdefault(chunk.chapter_number, []).append(chunk)
             titles[chunk.chapter_number] = chunk.chapter_title
-        expected_chapters = list(range(1, len(grouped) + 1))
-        if sorted(grouped) != expected_chapters:
-            raise AgentPipelineError(f"组装章节不完整：期望 {expected_chapters}，实际 {sorted(grouped)}")
+        expected_chapters = sorted(grouped)
+        if not expected_chapters:
+            raise AgentPipelineError("没有可组装的 OCR 章节")
+        previous_number = 0
         for number in expected_chapters:
             chapter_chunks = grouped[number]
+            if number != previous_number + 1:
+                # Keep printed/internal chapter numbering when one or more
+                # chapters are absent from a selected-page PDF.
+                input_lines.append(f"\\setcounter{{chapter}}{{{number - 1}}}")
             input_lines.append(f"\\chapter{{{tex_escape(titles[number])}}}")
             input_lines.extend(
                 f"\\input{{chapters/{chunk.chunk_id}}}" for chunk in chapter_chunks
             )
+            previous_number = number
             assembled_chapters.append(
                 {
                     "number": number,
