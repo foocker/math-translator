@@ -95,8 +95,18 @@ output/book/book.pdf
 仓库中的 `translator.sh` 使用 3 路并发翻译默认 `output/` 下的英文分块，并保留原始英文 TeX：
 
 ```bash
-bash translator.sh
+# bash translator.sh
+bash translator.sh output/proofs_and_refutations mathematical_philosophy
 ```
+
+翻译指定的书稿目录时，将目录和数学领域作为参数传入：
+
+```bash
+bash translator.sh output/proofs_and_refutations mathematical_philosophy
+```
+
+脚本会读取该目录下的 `book.tex` 和 `chapters/*.tex`，已有的
+`chapters/*-zh.tex` 会自动跳过。
 
 主要产物：
 
