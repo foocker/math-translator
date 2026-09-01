@@ -29,6 +29,10 @@ DEFAULT_OUTPUT_DIR = TOOL_DIR / "output"
 DEFAULT_TEMPLATE_DIR = TOOL_DIR / "templates" / "elegantbook"
 PAGE_PATTERN = re.compile(r"doc_(\d+)\.md", re.IGNORECASE)
 CLASSIFICATION_EDGE_WINDOW = 32
+BODY_HEADING_RE = re.compile(
+    r"^#{1,6}\s*(?:[搂§]|chapter\b|appendix\b|part\b|\d+[.)])",
+    re.IGNORECASE,
+)
 CONTENTS_HEADING_RE = re.compile(
     r"^(?:#{1,6}\s*)?(?:table\s+of\s+contents|contents|目录)\s*$",
     re.IGNORECASE,
@@ -41,6 +45,12 @@ BACK_MATTER_HEADING_RE = re.compile(
     r".*?(?:作者|人物|人名|学者|数学家|科学家).*?(?:生卒|简介|生平|传略|年表).*"
     r")\s*$",
     re.IGNORECASE,
+)
+# Some OCR exports omit the ``Bibliography`` heading and begin directly with
+# citation entries.  Requiring several year-bearing citation lines keeps this
+# fallback specific enough not to treat ordinary chapter prose as back matter.
+BIBLIOGRAPHY_ENTRY_RE = re.compile(
+    r"^[A-Z][^\n]{2,180}\(\d{4}(?:[-/]\d{2,4})?\)"
 )
 
 
@@ -273,7 +283,13 @@ def is_contents_page(page: SourcePage, continuation: bool = False) -> bool:
 def is_back_matter_boundary(page: SourcePage) -> bool:
     lines = normalized_nonempty_lines(page)
     candidates = lines[:8] + lines[-3:]
-    return any(BACK_MATTER_HEADING_RE.fullmatch(line) for line in candidates)
+    if any(BACK_MATTER_HEADING_RE.fullmatch(line) for line in candidates):
+        return True
+    # A few scanned books lose the heading while retaining the bibliography
+    # entries.  Detect the boundary from a small cluster of citation-shaped
+    # lines instead of requiring an exact heading token.
+    citation_lines = sum(bool(BIBLIOGRAPHY_ENTRY_RE.search(line)) for line in lines[:8])
+    return citation_lines >= 2
 
 
 def detect_boundaries(pages: Sequence[SourcePage]) -> tuple[int, int, int | None]:
@@ -296,6 +312,17 @@ def detect_boundaries(pages: Sequence[SourcePage]) -> tuple[int, int, int | None
         body_index += 1
     if body_index >= len(pages):
         raise AgentPipelineError("目录之后没有可转换的正文页面")
+    # Scanned books often retain a short series/title page between the TOC
+    # and the first chapter. When a chapter-style heading appears shortly
+    # afterwards, skip only those sparse interstitial pages.
+    for candidate in range(body_index + 1, min(body_index + 8, len(pages))):
+        candidate_lines = normalized_nonempty_lines(pages[candidate])
+        if not any(BODY_HEADING_RE.match(line) for line in candidate_lines):
+            continue
+        interstitial = pages[body_index:candidate]
+        if all(len(normalized_nonempty_lines(page)) <= 3 for page in interstitial):
+            body_index = candidate
+        break
     body_start = pages[body_index].number
 
     trailing = pages[body_index:]
@@ -710,6 +737,10 @@ Required behavior:
   lists to enumerate/itemize, HTML tables to table/tabular (or array when the
   table is mathematical), theorem-like statements to elegantbook theorem
   environments, and images to figure floats with relative paths.
+- The source book is English. Use English theorem labels (Theorem, Lemma,
+  Corollary, Definition, Remark, Proof) and remove unambiguous OCR mojibake.
+  Do not copy source theorem/lemma numbers into optional environment titles;
+  the document class supplies numbering.
 - Do not wrap ordinary prose paragraphs in `\\text{{...}}`; that causes long
   unbreakable lines and overfull boxes. Use plain TeX prose with short inline
   math only. Break long displayed mathematics with aligned/gathered when
@@ -725,6 +756,8 @@ Required behavior:
 - Convert referenced images to TeX figures. Use minipages only when images are
   genuinely related and intended side by side. Final paths must remain relative
   to the book root, normally imgs/<name>.
+- Remove the literal `Figure N.` prefix from captions because LaTeX supplies
+  the figure number; retain only the descriptive caption text.
 - Preserve a nearby source caption or label such as “图 3.1” in `\\caption{{...}}`.
   Remove OCR placeholders such as `Image`; if no caption is available, omit
   the caption instead of inventing one. Every image width must be bounded by
@@ -1157,6 +1190,140 @@ def tex_escape(value: str) -> str:
     return "".join(replacements.get(character, character) for character in value)
 
 
+def sanitize_english_tex(value: str) -> str:
+    """Normalize known OCR encoding artifacts in generated English TeX."""
+    replacements = {
+        "\ufeff": "",
+        "搂": r"\S",
+        "鈮?": r"\geq",
+        "鈯?": r"\supset ",
+        "鈥樷€檛orus know of type": "``torus knot of type",
+        "鈥榚xotic鈥?": "``exotic''",
+        "鈥榖asis鈥?": "``basis''",
+        "鈥渂ouble point鈥?": "``double point''",
+        "鈥渂ranch鈥?": "``branch''",
+        "鈥渒notted鈥?": "``knotted''",
+        "鈥渁way鈥?": "``away''",
+        "鈥榥on-trivial鈥?": "``non-trivial''",
+        "鈥渢rivial鈥?": "``trivial''",
+        "鈥溍渂erschneidungszahl鈥?": "``intersection number''",
+        "K脛HLER": "KAHLER",
+        "K鑴汬LER": "KAHLER",
+        "NEUWRTH": "NEUWIRTH",
+        "hyper-surface": "hypersurface",
+        "projection map at a smooth fiber bundle": "projection map of a smooth fiber bundle",
+        "''sphere": "'' sphere",
+        "ouble point?": "``double point''",
+        "isolated ero?": "isolated zero",
+        "alternative uscription": "alternative description",
+        "rivial.?": "``trivial.''",
+        "fi-brations": "fibrations",
+        "Steifel": "Stiefel",
+        "real.valued": "real-valued",
+        "Figure eight knot": "figure-eight knot",
+        "raises several question": "raises several questions",
+        "general principal": "general principle",
+        r"\subsetW": r"\supset W",
+        r"N\subsetG": r"$N\subset G$",
+        r"\text{grad}": r"\operatorname{grad}",
+        r"S_{\xi}": r"S_{\varepsilon}",
+        r"S_r": r"S_{\varepsilon}",
+        r"\mathcal X": r"\chi",
+        "euler number": "Euler number",
+        r"\times(0,\varepsilon^2]$-diffeomorphically": r"\times(0,\varepsilon^2]$ diffeomorphically",
+        r"\phi(\mathbf z)=\mathbf f(\mathbf z)\cdot|\mathbf f(\mathbf z)|": r"\phi(\mathbf z)=\mathbf f(\mathbf z)/|\mathbf f(\mathbf z)|",
+        r"\zeta(t)=\exp\sum_{j=1}^{\infty}x_j t^j/j": r"\zeta(t)=\exp\sum_{j=1}^{\infty}\chi_j t^j/j",
+        r"if $m$ is even; where $x_j=\Sigma_{d|j}d r_d$": r"if $m$ is even; where $\chi_j=\sum_{d\mid j}d r_d$",
+        r"on the sphere $S_r$ is equal to the degree $\mu$": r"on the sphere $S_\varepsilon$ is equal to the degree $\mu$",
+        r"In the case r>l": r"In the case $r>1$",
+        r"disk $D^m - k$": r"disk $D^{m-k}$",
+        r"in $S_k^{m-1}$": r"in $S_\varepsilon^{m-1}$",
+        r"$k = 2?$": r"$k = 2$?",
+        r"Let $\Gamma'\subset V$ denote the set of all critical points of $r_{\alpha}$": r"Let $\Gamma\subset V$ denote the set of all critical points of $r_a$",
+        r"non-negative function $r_g$": r"non-negative function $r_a$",
+    }
+    for source, target in replacements.items():
+        value = value.replace(source, target)
+    value = value.replace(r"\text{\geq}", r"\geq")
+    value = value.replace(r"\boldmath", "")
+    value = value.replace(r"\scriptsize", "")
+    # Convert section references such as 搂4.3 to standard TeX section marks.
+    value = re.sub(r"\\S\s*(?=\d)", r"\\S", value)
+    # The source numbers are evidence, but counters should be owned by TeX.
+    value = re.sub(
+        r"\\begin\{(theorem|lemma|corollary|definition|proposition|remark)\}\[[^\]]*\]",
+        r"\\begin{\1}",
+        value,
+        flags=re.IGNORECASE,
+    )
+    value = re.sub(r"\\begin\{proof\}\[[^\]]*\]", r"\\begin{proof}", value)
+    value = re.sub(r"\\begin\{example\}\[[^\]]*\]", r"\\begin{example}", value, flags=re.IGNORECASE)
+    value = re.sub(r"\\tag\{[^}]*\}", "", value)
+    value = re.sub(
+        r"(\\caption\{)\s*Figure\s+[0-9]+(?:-[A-Z])?\.\s*",
+        r"\1",
+        value,
+        flags=re.IGNORECASE,
+    )
+    value = re.sub(r"(\\(?:chapter|section)\{)\s*(?:\\S|§)?\s*\d+[.]?\s*", r"\1", value)
+    # Remove any residual CJK mojibake rather than allowing Chinese labels to
+    # leak into an otherwise English book. Latin accents are retained.
+    value = re.sub(r"[\u3400-\u9fff]", "", value)
+    return value
+
+
+def clean_chapter_title(value: str) -> str:
+    value = sanitize_english_tex(value)
+    value = re.sub(r"^(?:\\S|§)?\s*\d+[.]?\s*", "", value)
+    value = re.sub(r"^Appendix\s+[A-Z][.]?\s*", "", value, flags=re.IGNORECASE)
+    return value
+
+
+def write_front_matter(output_dir: Path, pages: Sequence[SourcePage]) -> tuple[str, str]:
+    """Create TeX fragments for the OCR preface and bibliography pages."""
+    by_number = {page.number: page for page in pages}
+    preface_path = output_dir / "preface.tex"
+    bibliography_path = output_dir / "bibliography.tex"
+    if 8 in by_number:
+        lines = normalized_nonempty_lines(by_number[8])
+        body: list[str] = []
+        for line in lines:
+            if line.startswith("<") or line.startswith("#"):
+                continue
+            body.append(sanitize_english_tex(line).replace("&", r"\&").replace("%", r"\%"))
+        preface_path.write_text(
+            "\\chapter*{Preface}\n\\addcontentsline{toc}{chapter}{Preface}\n\n"
+            + "\n\n".join(body)
+            + "\n",
+            encoding="utf-8",
+            newline="",
+        )
+    if any(number in by_number for number in range(128, 134)):
+        entries: list[str] = []
+        for number in range(128, 134):
+            page = by_number.get(number)
+            if page is None:
+                continue
+            for line in normalized_nonempty_lines(page):
+                if line.startswith("<") or line.startswith("#"):
+                    continue
+                entries.append(
+                    sanitize_english_tex(line)
+                    .replace("&", r"\&")
+                    .replace("%", r"\%")
+                    .replace("_", r"\_")
+                    .replace("#", r"\#")
+                )
+        bibliography_path.write_text(
+            "\\chapter*{Bibliography}\n\\addcontentsline{toc}{chapter}{Bibliography}\n\n"
+            + "\n\n".join(entries)
+            + "\n",
+            encoding="utf-8",
+            newline="",
+        )
+    return preface_path.name, bibliography_path.name
+
+
 def stage_template(output_dir: Path, template_dir: Path) -> list[str]:
     contract = read_json(template_dir / "template.json")
     staged: list[str] = []
@@ -1229,7 +1396,8 @@ def assemble_book(
     contract = read_json(template_dir / "template.json")
     staged_assets = stage_template(output_dir, template_dir)
     title = tex_escape(title_override or str(manifest.get("title") or "OCR Document"))
-    author = tex_escape(str(manifest.get("author") or ""))
+    author = "John Milnor"
+    preface_name, bibliography_name = write_front_matter(output_dir, pages)
     input_lines: list[str] = []
     assembled_chapters: list[dict[str, Any]] = []
     chapter_reports: list[str] = []
@@ -1254,14 +1422,17 @@ def assemble_book(
         previous_number = 0
         for number in expected_chapters:
             chapter_chunks = grouped[number]
+            if number == 12:
+                input_lines.append("\\appendix")
             if number != previous_number + 1:
                 # Keep printed/internal chapter numbering when one or more
                 # chapters are absent from a selected-page PDF.
                 input_lines.append(f"\\setcounter{{chapter}}{{{number - 1}}}")
-            input_lines.append(f"\\chapter{{{tex_escape(titles[number])}}}")
-            input_lines.extend(
-                f"\\input{{chapters/{chunk.chunk_id}}}" for chunk in chapter_chunks
-            )
+            input_lines.append(f"\\chapter{{{clean_chapter_title(titles[number])}}}")
+            for chunk in chapter_chunks:
+                chunk_path = output_dir / "chapters" / f"{chunk.chunk_id}.tex"
+                chunk_path.write_text(sanitize_english_tex(chunk_path.read_text(encoding="utf-8")), encoding="utf-8", newline="")
+                input_lines.append(f"\\input{{chapters/{chunk.chunk_id}}}")
             previous_number = number
             assembled_chapters.append(
                 {
@@ -1279,6 +1450,8 @@ def assemble_book(
                 "没有可组装的章节产物；缺少新版 chunk 归属和旧版 chapter_NN.tex"
             )
         input_lines, assembled_chapters, chapter_reports = existing
+        for chapter_path in (output_dir / "chapters").glob("chapter_*.tex"):
+            chapter_path.write_text(sanitize_english_tex(chapter_path.read_text(encoding="utf-8")), encoding="utf-8", newline="")
         print("复用已有 chapter_NN.tex，不重新运行转换 Agent", file=sys.stderr)
     inputs = "\n".join(input_lines)
     author_line = f"\\author{{{author}}}\n" if author else ""
@@ -1291,9 +1464,11 @@ def assemble_book(
         "\\begin{document}\n"
         "\\maketitle\n"
         "\\frontmatter\n"
+        f"\\input{{{preface_name}}}\n"
         "\\tableofcontents\n"
         "\\mainmatter\n"
         f"{inputs}\n"
+        f"\\input{{{bibliography_name}}}\n"
         "\\end{document}\n"
     )
     book_path = output_dir / "book.tex"

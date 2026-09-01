@@ -4,6 +4,7 @@
 \usepackage{longtable}
 \usepackage{tabularx}
 \usepackage{tikz}
+\usepackage{chngcntr}
 \usetikzlibrary{arrows.meta,calc,positioning,decorations.pathreplacing}
 \graphicspath{{figures/}{images/}}
 % Keep OCR-derived prose, formulas, figures, and wide tables inside the text block.
@@ -11,3 +12,5 @@
 \setlength{\tabcolsep}{3pt}
 \renewcommand{\arraystretch}{1.15}
 \allowdisplaybreaks
+\geometry{paperwidth=6in,paperheight=9in,top=18mm,bottom=18mm,left=16mm,right=16mm,headheight=14pt,headsep=4mm,footskip=10mm}
+\counterwithout{figure}{chapter}

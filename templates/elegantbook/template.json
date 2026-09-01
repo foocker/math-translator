@@ -2,7 +2,7 @@
   "id": "elegantbook",
   "version": "4.7-2026.05.01",
   "document_class": "elegantbook",
-  "document_class_line": "\\documentclass[cn,11pt,scheme=chinese]{elegantbook}",
+  "document_class_line": "\\documentclass[en,11pt,device=pad]{elegantbook}",
   "preamble_input": "preamble",
   "assets": [
     "elegantbook.cls",

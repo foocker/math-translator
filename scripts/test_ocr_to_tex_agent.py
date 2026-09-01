@@ -119,6 +119,50 @@ class ExcerptedPdfOutlineTests(unittest.TestCase):
                 self.outline, self.page_manifest, self.pages
             )
 
+    def test_unheaded_bibliography_page_is_a_back_matter_boundary(self) -> None:
+        page = self.pages[0]
+        page.path.write_text(
+            "J. W. Alexander, On types of knotted curves (1927), Annals.\n"
+            "A. Andreotti, The Lefschetz theorem (1959), Annals.\n",
+            encoding="utf-8",
+        )
+        self.assertTrue(ocr_to_tex_agent.is_back_matter_boundary(page))
+
+    def test_sanitizer_repairs_unbalanced_subset_expression(self) -> None:
+        source = "Any normal subgroup N\\subsetG determines a covering."
+        self.assertEqual(
+            ocr_to_tex_agent.sanitize_english_tex(source),
+            "Any normal subgroup $N\\subset G$ determines a covering.",
+        )
+
+    def test_sanitizer_removes_source_example_identifier(self) -> None:
+        self.assertEqual(
+            ocr_to_tex_agent.sanitize_english_tex(r"\begin{example}[9.7]"),
+            r"\begin{example}",
+        )
+
+    def test_sanitizer_repairs_recurring_ocr_word_fragments(self) -> None:
+        source = (
+            "an isolated ero?; an alternative uscription; all fi-brations; "
+            "the Steifel manifold; a real.valued function"
+        )
+        self.assertEqual(
+            ocr_to_tex_agent.sanitize_english_tex(source),
+            "an isolated zero; an alternative description; all fibrations; "
+            "the Stiefel manifold; a real-valued function",
+        )
+
+    def test_sanitizer_repairs_verified_formula_ocr(self) -> None:
+        source = (
+            r"\zeta(t)=\exp\sum_{j=1}^{\infty}x_j t^j/j; "
+            r"if $m$ is even; where $x_j=\Sigma_{d|j}d r_d$"
+        )
+        self.assertEqual(
+            ocr_to_tex_agent.sanitize_english_tex(source),
+            r"\zeta(t)=\exp\sum_{j=1}^{\infty}\chi_j t^j/j; "
+            r"if $m$ is even; where $\chi_j=\sum_{d\mid j}d r_d$",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
