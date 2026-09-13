@@ -1,3 +1,5 @@
+
+
 # Math Translator
 
 将 PaddleOCR-VL 输出的数学书 Markdown 转换为 ElegantBook TeX。转换阶段保留原始语言；英文 TeX 翻译为中文是独立的可选步骤。
@@ -118,7 +120,6 @@ bash translator.sh output/proofs_and_refutations mathematical_philosophy
 ```text
 output/chapters/*-zh.tex
 output/book-zh.tex
-output/book-zh.pdf
 ```
 
 `translator.sh` 中的书名和数学领域是示例配置，处理其他书籍前按实际内容调整。
